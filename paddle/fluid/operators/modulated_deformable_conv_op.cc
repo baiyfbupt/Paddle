@@ -265,18 +265,24 @@ class ModulatedDeformableConvGradOp : public framework::OperatorWithKernel {
 
     PADDLE_ENFORCE(ctx->HasInput(framework::GradVarName("Output")),
                    "the gradient of output(Out) must not be null");
-    if (ctx->HasOutput(framework::GradVarName("Filter"))) {
-      ctx->SetOutputDim(framework::GradVarName("Filter"), filter_dims);
+    if (ctx->HasOutput(framework::GradVarName("Input"))) {
+      ctx->SetOutputDim(framework::GradVarName("Input"), in_dims);
     }
-    if (ctx->HasOutput(framework::GradVarName("NodesVector"))) {
-      ctx->SetOutputDim(framework::GradVarName("NodesVector"), vectors_dims);
+    if (ctx->HasOutput(framework::GradVarName("Weights"))) {
+      ctx->SetOutputDim(framework::GradVarName("Weights"), filter_dims);
+    }
+    if (ctx->HasOutput(framework::GradVarName("Offset"))) {
+      ctx->SetOutputDim(framework::GradVarName("Offset"), offset_dims);
+    }
+    if (ctx->HasOutput(framework::GradVarName("Mask"))) {
+      ctx->SetOutputDim(framework::GradVarName("Mask"), mask_dims);
     }
   }
 
  protected:
   framework::OpKernelType GetExpectedKernelType(
       const framework::ExecutionContext &ctx) const override {
-    return framework::OpKernelType(ctx.Input<Tensor>("NodesVector")->type(),
+    return framework::OpKernelType(ctx.Input<Tensor>("Input")->type(),
                                    ctx.device_context());
   }
 };
@@ -284,16 +290,24 @@ class ModulatedDeformableConvGradOp : public framework::OperatorWithKernel {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OPERATOR(tree_conv, ops::TreeConvOp, ops::TreeConvOpMaker,
-                  ops::TreeConvGradOpDescMaker);
+REGISTER_OPERATOR(modulated_deformable_conv,
+                  ops::ModulatedDeformableConvOp,
+                  ops::ModulatedDeformableConvOpMaker,
+                  ops::ModulatedDeformableConvGradOpDescMaker);
 
-REGISTER_OPERATOR(tree_conv_grad, ops::TreeConvGradOp);
+REGISTER_OPERATOR(modulated_deformable_conv_grad,
+                  ops::ModulatedDeformableConvGradOp);
 
 REGISTER_OP_CPU_KERNEL(
-    tree_conv, ops::TreeConvKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::TreeConvKernel<paddle::platform::CPUDeviceContext, double>);
+    modulated_deformable_conv,
+    ops::ModulatedDeformableConvKernel<paddle::platform::CPUDeviceContext,
+                                       float>,
+    ops::ModulatedDeformableConvKernel<paddle::platform::CPUDeviceContext,
+                                       double>);
 
 REGISTER_OP_CPU_KERNEL(
-    tree_conv_grad,
-    ops::TreeConvGradKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::TreeConvGradKernel<paddle::platform::CPUDeviceContext, double>);
+    modulated_deformable_conv_grad,
+    ops::ModulatedDeformableConvGradKernel<paddle::platform::CPUDeviceContext,
+                                           float>,
+    ops::ModulatedDeformableConvGradKernel<paddle::platform::CPUDeviceContext,
+                                           double>);
