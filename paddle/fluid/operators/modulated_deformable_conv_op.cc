@@ -13,7 +13,6 @@
 // limitations under the License.
 
 #include "paddle/fluid/operators/modulated_deformable_conv_op.h"
-#include "paddle/fluid/operators/conv_op.h"
 
 #include <vector>
 
@@ -32,9 +31,9 @@ class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker 
     AddInput("Mask",
              "(Tensor) The input mask. "
              "The shape of the mask is "
-             "[N groups * kernel_2 * kernel_h, H, W].");
-    AddInput("Weights",
-             "(Tensor) The Input Weights "
+             "[N, groups * kernel_w * kernel_h, H, W].");
+    AddInput("Filter",
+             "(Tensor) The Input Filter "
              "The shape of the wight is "
              "[num_filters, channel_input, kernel_h, kernel_w.");
     AddInput("Bias",
@@ -116,15 +115,15 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE(ctx->HasInput("Mask"),
                    "Input(Mask) of ModulatedDeformableConvOp "
                    "should not be null");
-    PADDLE_ENFORCE(ctx->HasInput("Weights"),
-                   "Input(Weights) of ModulatedDeformableConvOp "
+    PADDLE_ENFORCE(ctx->HasInput("Filter"),
+                   "Input(Filter) of ModulatedDeformableConvOp "
                    "should not be null");
     PADDLE_ENFORCE(ctx->HasOutput("Output"),
                    "Output(Output) of ModulatedDeformableConvOp "
                    "should not be null.");
 
     auto in_dims = ctx->GetInputDim("Input");
-    auto filter_dims = ctx->GetInputDim("Weights");
+    auto filter_dims = ctx->GetInputDim("Filter");
     auto offset_dims = ctx->GetInputDim("Offset");
     auto mask_dims = ctx->GetInputDim("Mask");
 
@@ -178,13 +177,13 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
         "incorrect dilation size");
     }
 
-    std::vector<int_64t>output_shape({in_dims[0], filter_dims[0]});
+    std::vector<int64_t>output_shape({in_dims[0], filter_dims[0]});
     for (size_t i = 0; i < strides.size(), ++i) {
-        output_shape.push_back(DeformableOutSize(in_dims[i + 2],
-                                                 filter_dims[i + 2],
-                                                 paddings[i],
-                                                 strides[i],
-                                                 dilations[i]));
+        output_shape.push_back(ConvOutputSize(in_dims[i + 2],
+                                              filter_dims[i + 2],
+                                              dilations[i],
+                                              paddings[i],
+                                              strides[i]));
     }
     PADDLE_ENFORCE_EQ(
         output_shape[1] % deformable_groups, 0U,
@@ -236,14 +235,14 @@ class ModulatedDeformableConvGradOpDescMaker : public framework::SingleGradOpDes
 
     op->SetType("modulated_deformable_conv_grad");
     op->SetInput("Input", Input("Input"));
-    op->SetInput("Weights", Input("Weights"));
+    op->SetInput("Filter", Input("Filter"));
     op->SetInput("Bias", Input("Bias"));
     op->SetInput("Offset", Input("Offset"));
     op->SetInput("Mask", Input("Mask"));
     op->SetInput(framework::GradVarName("Output"), OutputGrad("Output"));
 
     op->SetOutput(framework::GradVarName("Input"), InputGrad("Input"));
-    op->SetOutput(framework::GradVarName("Weights"), InputGrad("Weights"));
+    op->SetOutput(framework::GradVarName("Filter"), InputGrad("Filter"));
     op->SetOutput(framework::GradVarName("Bias"), InputGrad("Bias"));
     op->SetOutput(framework::GradVarName("Offset"), InputGrad("Offset"));
     op->SetOutput(framework::GradVarName("Mask"), InputGrad("Mask"));
@@ -259,7 +258,7 @@ class ModulatedDeformableConvGradOp : public framework::OperatorWithKernel {
 
   void InferShape(framework::InferShapeContext *ctx) const override {
     auto in_dims = ctx->GetInputDim("Input");
-    auto filter_dims = ctx->GetInputDim("Weights");
+    auto filter_dims = ctx->GetInputDim("Filter");
     auto offset_dims = ctx->GetInputDim("Offset");
     auto mask_dims = ctx->GetInputDim("Mask");
 
@@ -268,8 +267,8 @@ class ModulatedDeformableConvGradOp : public framework::OperatorWithKernel {
     if (ctx->HasOutput(framework::GradVarName("Input"))) {
       ctx->SetOutputDim(framework::GradVarName("Input"), in_dims);
     }
-    if (ctx->HasOutput(framework::GradVarName("Weights"))) {
-      ctx->SetOutputDim(framework::GradVarName("Weights"), filter_dims);
+    if (ctx->HasOutput(framework::GradVarName("Filter"))) {
+      ctx->SetOutputDim(framework::GradVarName("Filter"), filter_dims);
     }
     if (ctx->HasOutput(framework::GradVarName("Offset"))) {
       ctx->SetOutputDim(framework::GradVarName("Offset"), offset_dims);
