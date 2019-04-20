@@ -27,6 +27,308 @@ static inline int NumBlocks(const int N) {
 }
 
 template <typename T>
+__device__ T dmcn_get_gradient_weight(T argmax_h, T argmax_w,
+  const int h, const int w, const int height, const int width) {
+
+  if (argmax_h <= -1 || argmax_h >= height || argmax_w <= -1 || argmax_w >= width) {
+    //empty
+    return 0;
+  }
+
+  int argmax_h_low = floor(argmax_h);
+  int argmax_w_low = floor(argmax_w);
+  int argmax_h_high = argmax_h_low + 1;
+  int argmax_w_high = argmax_w_low + 1;
+
+  T weight = 0;
+  if (h == argmax_h_low && w == argmax_w_low)
+      weight = (h + 1 - argmax_h) * (w + 1 - argmax_w);
+  if (h == argmax_h_low && w == argmax_w_high)
+      weight = (h + 1 - argmax_h) * (argmax_w + 1 - w);
+  if (h == argmax_h_high && w == argmax_w_low)
+      weight = (argmax_h + 1 - h) * (w + 1 - argmax_w);
+  if (h == argmax_h_high && w == argmax_w_high)
+      weight = (argmax_h + 1 - h) * (argmax_w + 1 - w);
+  return weight;
+}
+
+template <typename T>
+__global__ void modulated_deformable_col2im_gpu_kernel(const int nthreads,
+    const T* data_col, const T* data_offset, const T* data_mask,
+    const int channels, const int height, const int width,
+    const int kernel_h, const int kernel_w,
+    const int pad_h, const int pad_w,
+    const int stride_h, const int stride_w,
+    const int dilation_h, const int dilation_w,
+    const int channel_per_deformable_group,
+    const int batch_size, const int deformable_group,
+    const int height_col, const int width_col,
+    T* grad_im) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int offset = blockDim.x * gridDim.x;
+  for (size_t thread = index; i < nthreads; thread += offset) {
+    const int j = (thread / width_col / height_col / batch_size) % kernel_w;
+    const int i = (thread / width_col / height_col / batch_size / kernel_w) % kernel_h;
+    const int c = thread / width_col / height_col / batch_size / kernel_w / kernel_h;
+    // compute the start and end of the output
+
+    const int deformable_group_index = c / channel_per_deformable_group;
+
+    int w_out = thread % width_col;
+    int h_out = (thread / width_col) % height_col;
+    int b = (thread / width_col / height_col) % batch_size;
+    int w_in = w_out * stride_w - pad_w;
+    int h_in = h_out * stride_h - pad_h;
+
+    const T* data_offset_ptr = data_offset + (b * deformable_group
+        + deformable_group_index) * 2 * kernel_h * kernel_w * height_col * width_col;
+    const T* data_mask_ptr = data_mask + (b * deformable_group
+        + deformable_group_index) * kernel_h * kernel_w * height_col * width_col;
+    const int data_offset_h_ptr = ((2 * (i * kernel_w + j)) * height_col + h_out)
+        * width_col + w_out;
+    const int data_offset_w_ptr = ((2 * (i * kernel_w + j) + 1)
+        * height_col + h_out) * width_col + w_out;
+    const int data_mask_hw_ptr = ((i * kernel_w + j) * height_col + h_out)
+        * width_col + w_out;
+    const T offset_h = data_offset_ptr[data_offset_h_ptr];
+    const T offset_w = data_offset_ptr[data_offset_w_ptr];
+    const T mask = data_mask_ptr[data_mask_hw_ptr];
+    const T cur_inv_h_data = h_in + i * dilation_h + offset_h;
+    const T cur_inv_w_data = w_in + j * dilation_w + offset_w;
+
+    const T cur_top_grad = data_col[thread] * mask;
+    const int cur_h = (int)cur_inv_h_data;
+    const int cur_w = (int)cur_inv_w_data;
+    for (int dy = -2; dy <= 2; dy++) {
+      for (int dx = -2; dx <= 2; dx++) {
+        if (cur_h + dy >= 0 && cur_h + dy < height &&
+          cur_w + dx >= 0 && cur_w + dx < width &&
+          abs(cur_inv_h_data - (cur_h + dy)) < 1 &&
+          abs(cur_inv_w_data - (cur_w + dx)) < 1
+          ) {
+          int cur_bottom_grad_pos = ((b * channels + c) * height + cur_h + dy)
+              * width + cur_w + dx;
+          T weight = dmcn_get_gradient_weight(cur_inv_h_data, cur_inv_w_data,
+              cur_h + dy, cur_w + dx, height, width);
+          atomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
+        }
+      }
+    }
+  }
+}
+
+template<typename T>
+inline void modulated_deformable_col2im(
+  const framework::ExecutionContext& ctx,
+  const T* data_col, const T* data_offset, const T* data_mask,
+  const std::vector<int> im_shape, const std::vector<int> col_shape,
+  const std::vector<int> kernel_shape, const std::vector<int> pad,
+  const std::vector<int> stride, const std::vector<int> dilation,
+  const int deforamble_group, T* grad_im) {
+    int channel_per_deformable_group = im_shape[0] / deforamble_group;
+    int num_kernels = col_shape[0] * col_shape[1] * col_shape[2]
+                      * col_shape[3];
+    int blocks = NumBlocks(num_kernels);
+    int threads = kNumCUDAThreads;
+
+    modulated_deformable_col2im_gpu_kernel<T><<<blocks, threads, 0,
+        ctx.cuda_device_context().stream()>>>(
+      num_kernels, data_col, data_offset, data_mask, im_shape[0],
+      im_shape[1], im_shape[2], kernel_shape[2], kernel_shape[3],
+      pad[0], pad[1], stride[0], stride[1], dilation[0], dilation[1],
+      channel_per_deformable_group, col_shape[1], deforamble_group,
+      col_shape[2], col_shape[3], grad_im);
+  }
+)
+
+template <typename T>
+__device__ T dmcn_get_coordinate_weight(T argmax_h, T argmax_w,
+  const int height, const int width, const T* im_data,
+  const int data_width, const int bp_dir) {
+
+  if (argmax_h <= -1 || argmax_h >= height || argmax_w <= -1 || argmax_w >= width)
+  {
+    //empty
+    return 0;
+  }
+
+  int argmax_h_low = floor(argmax_h);
+  int argmax_w_low = floor(argmax_w);
+  int argmax_h_high = argmax_h_low + 1;
+  int argmax_w_high = argmax_w_low + 1;
+  
+  T weight = 0;
+
+  if (bp_dir == 0) {
+    if (argmax_h_low >= 0 && argmax_w_low >= 0)
+        weight += -1 * (argmax_w_low + 1 - argmax_w)
+            * im_data[argmax_h_low * data_width + argmax_w_low];
+    if (argmax_h_low >= 0 && argmax_w_high <= width - 1)
+        weight += -1 * (argmax_w - argmax_w_low)
+            * im_data[argmax_h_low * data_width + argmax_w_high];
+    if (argmax_h_high <= height - 1 && argmax_w_low >= 0)
+        weight += (argmax_w_low + 1 - argmax_w)
+            * im_data[argmax_h_high * data_width + argmax_w_low];
+    if (argmax_h_high <= height - 1 && argmax_w_high <= width - 1)
+        weight += (argmax_w - argmax_w_low)
+            * im_data[argmax_h_high * data_width + argmax_w_high];
+  } else if (bp_dir == 1) {
+    if (argmax_h_low >= 0 && argmax_w_low >= 0)
+        weight += -1 * (argmax_h_low + 1 - argmax_h)
+            * im_data[argmax_h_low * data_width + argmax_w_low];
+    if (argmax_h_low >= 0 && argmax_w_high <= width - 1)
+        weight += (argmax_h_low + 1 - argmax_h)
+            * im_data[argmax_h_low * data_width + argmax_w_high];
+    if (argmax_h_high <= height - 1 && argmax_w_low >= 0)
+        weight += -1 * (argmax_h - argmax_h_low)
+            * im_data[argmax_h_high * data_width + argmax_w_low];
+    if (argmax_h_high <= height - 1 && argmax_w_high <= width - 1)
+        weight += (argmax_h - argmax_h_low)
+            * im_data[argmax_h_high * data_width + argmax_w_high];
+  }
+
+  return weight;
+}
+
+
+template <typename T>
+__global__ void deforamble_col2im_coord_gpu_kernel(const int nthreads,
+    const T* data_col, const T* data_im, const T* data_offset,
+    const T* data_mask, const int channels, const int height,
+    const int width, const int kernel_h, const int kernel_w,
+    const int pad_h, const int pad_w, const int stride_h, const int stride_w,
+    const int dilation_h, const int dilation_w,
+    const int channel_per_deformable_group,
+    const int batch_size, const int offset_channels, const int deforamble_group,
+    const int height_col, const int width_col,
+    T* grad_offset, T* grad_mask) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int offset = blockDim.x * gridDim.x;
+  for (size_t i = index; i < nthreads; i += offset) {
+    T val = 0, mval = 0;
+    const int w = nthreads % width_col;
+    const int h = (nthreads / width_col) % height_col;
+    const int c = (nthreads / width_col / height_col) % offset_channels;
+    const int b = (nthreads / width_col / height_col) / offset_channels;
+
+    const int deformable_group_index = c / (2 * kernel_h * kernel_w);
+    const int col_step = kernel_h * kernel_w;
+    int cnt = 0;
+    const T* data_col_ptr = data_col + deformable_group_index
+        * channel_per_deformable_group * batch_size * width_col * height_col;
+    const T* data_im_ptr = data_im + (b * deformable_group + deformable_group_index)
+        * channel_per_deformable_group / kernel_h / kernel_w * height * width;
+    const T* data_offset_ptr = data_offset + (b * deformable_group + deformable_group_index)
+        * 2 * kernel_h * kernel_w * height_col * width_col;
+    const T* data_mask_ptr = data_mask + (b * deformable_group + deformable_group_index)
+        * kernel_h * kernel_w * height_col * width_col;
+
+    const int offset_c = c - deformable_group_index * 2 * kernel_h * kernel_w;
+    
+    for (int col_c = offset_c / 2; col_c < channel_per_deformable_group; col_c += col_step) {
+      const int col_pos = (((col_c * batch_size + b) * height_col) + h)
+          * width_col + w;
+      const int bp_dir = offset_c % 2;
+
+      int j = (col_pos / width_col / height_col / batch_size) % kernel_w;
+      int i = (col_pos / width_col / height_col / batch_size / kernel_w) % kernel_h;
+      int w_out = col_pos % width_col;
+      int h_out = (col_pos / width_col) % height_col;
+      int w_in = w_out * stride_w - pad_w;
+      int h_in = h_out * stride_h - pad_h;
+      const int data_offset_h_ptr = (((2 * (i * kernel_w + j)) * height_col + h_out)
+          * width_col + w_out);
+      const int data_offset_w_ptr = (((2 * (i * kernel_w + j) + 1) * height_col + h_out)
+          * width_col + w_out);
+      const int data_mask_hw_ptr = (((i * kernel_w + j) * height_col + h_out)
+          * width_col + w_out);
+      const T offset_h = data_offset_ptr[data_offset_h_ptr];
+      const T offset_w = data_offset_ptr[data_offset_w_ptr];
+      const T mask = data_mask_ptr[data_mask_hw_ptr];
+      T inv_h = h_in + i * dilation_h + offset_h;
+      T inv_w = w_in + j * dilation_w + offset_w;
+      if (inv_h <= -1 || inv_w <= -1 || inv_h >= height || inv_w >= width) {
+        inv_h = inv_w = -2;
+      } else {
+        mval += data_col_ptr[col_pos] * dmcn_im2col_bilinear(data_im_ptr
+            + cnt * height * width, width, height, width, inv_h, inv_w);
+      }
+      const T weight = dmcn_get_coordinate_weight(
+        inv_h, inv_w,
+        height, width, data_im_ptr + cnt * height * width, width, bp_dir);
+      val  += weight * data_col_ptr[col_pos] * mask;    
+      cnt  += 1;
+    }
+    grad_offset[i] = val;
+    if (offset_c % 2 == 0)
+        grad_mask[(((b * deformable_group + deformable_group_index)
+            * kernel_h * kernel_w + offset_c / 2) * height_col + h)
+                * width_col + w] = mval;
+
+
+  }
+
+template <typename T>
+inline void modulated_deformable_col2im_coord(
+    const framework::ExecutionContext& ctx,
+    const T* data_col, const T* data_im, const T* data_offset,
+    const T* data_mask, const std::vector<int> im_shape,
+    const std::vector<int> col_shape, const std::vector<int> kernel_shape,
+    const std::vector<int> paddings, const std::vector<int> strides,
+    const std::vector<int> dilations, const int deformable_groups,
+    T* grad_offset, T* grad_mask) {
+
+  int num_kernels = 2 * filter_shape_vec[2] * filter_shape_vec[3]
+                    * col_shape[1] * col_shape[2] * col_shape[3]
+                    * deforamble_groups;
+  int channel_per_deformable_group = col_shape[0] / deformable_groups;
+  int blocks = NumBlocks(num_kernels);
+  int threads = kNumCUDAThreads;
+
+  deforamble_col2im_coord_gpu_kernel<T><<<blocks, threads, 0,
+      ctx.cuda_device_context().stream()>>>(
+    num_kernels, data_col, data_im, data_offset, data_mask, in_shape[0], in_shape[1],
+    in_shape[2], filter_shape_vec[2], filter_shape_vec[3], paddings[0],
+    paddings[1], strides[0], strides[1], dilations[0], dilations[1],
+    channel_per_deformable_group, col_shape[1], 
+    2 * filter_shape_vec[2] * filter_shape_vec[3] * deforamble_groups,
+    deforamble_groups, col_shape[2], col_shape[3],
+    grad_offset, grad_mask);
+}
+
+// im_shape {c_i, i_h, i_w}
+// col_shape {c_in * k_h * k_w, im2col_step, o_h, o_w}
+// filter_shape {c_o, c_i, k_h, k_w}
+// paddings {p_h, p_w}
+// strides {s_h, s_w}
+// dilations {d_h, d_w}
+template <typename T>
+inline void modulated_deformable_im2col(
+    const framework::ExecutionContext& ctx,
+    const T* data_im, const T* data_offset,
+    const T* data_mask, const std::vector<int>im_shape,
+    const std::vector<int>col_shape, const std::vector<int>filter_shape,
+    const std::vector<int>paddings, const std::vector<int>strides,
+    const std::vector<int>dilations, const int deformable_groups,
+    T* data_col) {
+      // {c_i / deformable_group}
+      int channel_per_deformable_group = im_shape[0] / deformable_groups;
+      // {c_i * o_h * o_w}
+      int num_kernels = im_shape[0] * col_shape[1] * col_shape[2] * col_shape[3];
+
+      int blocks = NumBlocks(num_kernels);
+      int threads = kNumCUDAThreads;
+
+      modulated_deformable_im2col_gpu_kernel<T><<<blocks, threads, 0,
+          ctx.cuda_device_context().stream()>>>(
+          num_kernels, data_im, data_offset, data_mask, im_shape[1], im_shape[2],
+          filter_shape[2], filter_shape[3], paddings[0], paddings[1],
+          strides[0], strides[1], dilations[0], dilations[1],
+          channel_per_deformable_group, col_shape[1], im_shape[0], 
+          deformable_groups, col_shape[2], col_shape[3], data_col);
+    }
+
+template <typename T>
 __device__ T dmcn_im2col_bilinear(const T* bottom_data, const int data_width,
         const int height, const int width, T h, T w) {
 
@@ -59,21 +361,22 @@ __device__ T dmcn_im2col_bilinear(const T* bottom_data, const int data_width,
 }
 
 template <typename T>
-__global__ void modulated_deformable_im2col(
-    const int nthreads, const T* input, const T* offset, const T* mask,
-    const int inage_h, const int image_w, const int kernel_h, const int kernel_w,
+__global__ void modulated_deformable_im2col_gpu_kernel(
+    const int nthreads, const T* data_im, const T* data_offset, const T* data_mask,
+    const int height, const int width, const int kernel_h, const int kernel_w,
     const int pad_h, const int pad_w, const int stride_h, const int stride_w,
     const int dilation_h, const int dilation_w,
-    const int out_h, const int out_w,
-    const int deformable_groups, const int channel_per_deformable_group,
-    T* col) {
+    const int channel_per_deformable_group,
+    const int batch_size, const int num_channels, const int deformable_group,
+    const int height_col, const int width_col, T* data_col) {
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int offset = blockDim.x * gridDim.x;
-  for (size_t i = index; i < nthreads; i += offset){
+  for (size_t i = index; i < nthreads; i += offset) {
     // index of output matrix
-    const int w_col = i % out_w;
-    const int h_col = (i / out_w) % out_h;
-    const int c_im = (i / out_w) / out_h;
+    const int w_col = i % width_col;
+    const int h_col = (i / width_col) % height_col;
+    const int b_col = (i / width_col) / height_col % batch_size;
+    const int c_im = (i / width_col / height_col) / batch_size;
     const int c_col = c_im * kernel_h * kernel *w;
 
     // conpute deformable group index
@@ -82,34 +385,38 @@ __global__ void modulated_deformable_im2col(
     const int h_in = h_col * stride_h - pad_h;
     const int w_in = w_col * stride_w - pad_w;
 
-    T* col_ptr = col + (c_col * out_h + h_col) * out_w + w_col;
-    const T* input_ptr = input + (c_im * image_h + h_in) * image_w + w_in;
-    const T* offset_ptr = offset
-        + deformable_group_index * 2 * kernel_h * kernel_w * out_h * out_w;
-    const T* mask_ptr = mask
-        + deformable_group_index * kernel_h * kernel_w * out_h * out_w;
+    T* data_col_ptr = data_col + 
+        ((c_col * batch_size + b_col) * height_col + h_col) * width_col + w_col;
+    const T* data_im_ptr = data_im + (b_col * num_channels + c_im) * height * width;
+    const T* data_offset_ptr = 
+        data_offset + (b_col * deformable_group + deformable_group_index) 
+            * 2 * kernel_h * kernel_w * height_col * width_col;
+    const T* data_mask_ptr = 
+        data_mask + (b_col *  deformable_group + deformable_group_index)
+            * kernel_h * kernel_w * height_col * width_col;
 
     for (int i = 0; i < kernel_h; ++i) {
       for (int j = 0; j < kernel_w; ++j) {
-        const int offset_h_ptr = ((2 * (i * kernel_w + j)) * out_h + h_col)
-                               * out_w + w_col;
-        const int offset_w_ptr = 
-            ((2 * (i * kernel_w +j) + 1) * height_col + h_col) * out_w + w_col;
-        const int mask_hw_ptr = ((i * kernel_w + j) * out_h + h_col)
-                               * out_w + w_col;
-        const T offset_h = offset_ptr[offset_h_ptr];
-        const T offset_w = offset_ptr[offset_w_ptr];
-        const T mask = mask_ptr[mask_hw_ptr];
+        const int data_offset_h_ptr = ((2 * (i * kernel_w + j)) * height_col + h_col)
+                                      * width_col + w_col;
+        const int data_offset_w_ptr = ((2 * (i * kernel_w + j) + 1) * height_col + h_col)
+                                      * width_col + w_col;
+        const int data_mask_hw_ptr = ((i * kernel_w + j) * height_col + h_col)
+                                      * width_col + w_col;
+
+        const T offset_h = data_offset_ptr[data_offset_h_ptr];
+        const T offset_w = data_offset_ptr[data_offset_w_ptr];
+        const T mask = data_mask_ptr[data_mask_hw_ptr];
         T val = static_cast<T>(0);
         const T h_im = h_in + i * dilation_h + offset_h;
         const T w_im = w_in + j * dilation_w + offset_w;
-        
-        if (h_im > -1 && w_im > -1 && h_im < image_h && w_im < image_w) {
-            val = dmcn_im2col_bilinear(input_ptr, image_w, image_h, image_w,
+
+        if (h_im > -1 && w_im > -1 && h_im < height && w_im < width) {
+            val = dmcn_im2col_bilinear(data_im_ptr, width, height, width,
                                        h_im, w_im);
         }
-        *col_ptr = val * mask;
-        data_col_ptr += out_h * out_w;
+        *data_col_ptr = val * mask;
+        data_col_ptr += batch_size * height_col * width_col;
       }
     }
   }
@@ -139,182 +446,315 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
 
     const int batch_size = static_cast<int>(input->dims()[0]);
 
+    // filter_shape_vec: {c_o, c_i, k_h, k_w}
     std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
-    std::vector<int64_t> offset_shape_vec(framework::vectorize(offset.dims()));
-    std::vector<int64_t> mask_shape_vec(framework::vectorize(mask.dims()));
+    // output_shape_vec: {n, o_c, o_h, o_w}
     std::vector<int64_t> output_shape_vec(framework::vectorize(output->dims()));
 
-    // get col_shape in the im2col calculation
+    // filter_shape_vec.size(): 4
+    // col_shape_vec: {c_i * k_h * k_w, im2col_step, o_h, o_w}
     size_t data_dim = filter_shape_vec.size() - 2;
-    std::vector<int64_t> col_shape_vec(1 + 2*data_dim);
-    col_shape_vec[0] = input->dims[1] / groups;
-
+    std::vector<int64_t> col_buffer_shape_vec(2 + data_dim);
+    //c_i * k_w * k_h /
+    col_buffer_shape_vec[0] = input->dims[1] * filter.dims()[2] * filter.dims()[3];
+    col_buffer_shape_vec[1] = im2col_step;
     for (size_t j = 0; j < data_dim; ++j) {
-      col_shape_vec[j + 1] = filter_shape_vec[j + 2];
-      col_shape_vec[j + 1 + data_dim] = output_shape_vec[j + 2];
+      col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
     }
-    framework::DDim col_shape(framework::make_ddim(col_shape_vec));
+    framework::DDim col_shape(framework::make_ddim(col_buffer_shape_vec));
+    std::vector<int64_t> output_buffer_shape_vec(1);
+    output_buffer_shape_vec[0] = batch_size * filter_shape_vec[0]
+                           * output_shape_vec[2] * output_shape_vec[3];
+    framework::DDim output_shape(framework::make_ddim(output_buffer_shape_vec));
+    Tensor col_buffer;
+    Tensor output_buffer;
+    col_buffer = ctx.AllocateTmpTensor<T, DeviceContext>(col_shape, dev_ctx);
+    output_buffer = ctx.AllocateTmpTensor<T, DeviceContext>(output_shape, dev_ctx);
 
-    // use col_matrix_shape in the gemm calculation
-    framework::DDim col_matrix_shape =
-        framework::flatten_to_2d(col_shape, data_dim + 1);
 
-    bool is_expand = IsExpand(filter_shape_vec, strides, paddings, dilations);
-    Tensor col;
-    Tensor col_matrix;
-    if (is_expand) {
-        col = ctx.AllocateTmpTensor<T, DeviceContext>(col_shape, dev_ctx);
-        col_matrix.ShareDataWith(col);
-        col_matrix.Resize(col_matrix_shape);
-    }
+    // col_shape_vec {c_i * k_w * k_h, o_h, o_w}
+    //col = ctx.AllocateTmpTensor<T, DeviceContext>(col_shape, dev_ctx);
+    //col_buffer_3d.ShareDataWith(col);
+    //col_buffer_3d.Resize(col_buffer_3d_shape);
 
-    // input
+    int64_t M = filter_shape_vec[0] / groups;
+    int64_t N = im2col_step * output_shape_vec[2] * output_shape_vec[3];
+    int64_t K = input->dims()[1] * filter_shape_vec[2] * filter_shape_vec[3]
+                / groups;
+    
+    Tensor weight_3d;
+    weight_3d.ShareDataWith(filter);
+    weight_3d.Resize(framework::make_ddim({groups, M, K}));
+    Tensor col_buffer_3d;
+    col_buffer_3d.ShareDataWith(col_buffer);
+    col_buffer_3d.Reisze(framework::make_ddim({groups, K, N}));
+    Tensor output_4d;
+    output_4d.ShareDataWith(output_buffer);
+    output_4d.Reisze(framework::make_ddim({batch_size / im2col_step, groups, M, N}));
+
+    // // input {c_i, i_h, i_w}
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
-    // offset
-    framework::DDim offset_shape =
-        framework::slice_ddim(offset.dims(), 1, offset.dims().size());
-    // mask
-    framework::DDim mask_shape =
-        framework::slice_ddim(mask.dims(), 1, mask->dims().size());
-    // filter
-    framework::DDim filter_matrix_shape = {filter.dims()[0],
-                                           filter.numel() / filter.dims()[0]};
-    filter.Resize(filter_matrix_shape);
-    // output
-    framework::DDim output_matrix_shape = {
-        output->dims()[1],
-        output->numel() / (output->dims()[0] * output->dims()[1])};
+    std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
+    // // offset {groups * k_h * k_w * 2, i_h, i_w}
+    // framework::DDim offset_shape =
+    //     framework::slice_ddim(offset.dims(), 1, offset.dims().size());
+    // // std::vector<int64_t> offset_shape_vec = framework::vectorize(offset_shape);
+    // // mask {groups * k_h * k_w, i_h, i_w}
+    // framework::DDim mask_shape =
+    //     framework::slice_ddim(mask.dims(), 1, mask.dims().size());
+    // // std::vector<int64_t> mask_shape_vec = framework::vectorize(mask_offset);
+    // // filter {c_i, k_h, k_w}
+    // framework::DDim filter_matrix_shape = {filter.dims()[0],
+    //                                        filter.numel() / filter.dims()[0]};
+    // filter.Resize(filter_matrix_shape);
+    // // output
+    // framework::DDim output_matrix_shape = {
+    //     output->dims()[1],
+    //     output->numel() / (output->dims()[0] * output->dims()[1])};
 
-    // convolution operator: im2col(or vol2col) + gemm
-    int in_step = static_cast<int>(input->dims()[1]) / groups;
-    int offset_step = static_cast<int>(offset.dims()[1]) / groups;
-    int mask_step = static_cast<int>(mask.dims()[1]) / groups;
-    int out_step = static_cast<int>(output->dims()[1]) / groups;
+    // // convolution operator: im2col(or vol2col) + gemm
+    // int in_step = static_cast<int>(input->dims()[1]) / groups;
+    // // int offset_step = static_cast<int>(offset.dims()[1]) / groups;
+    // // int mask_step = static_cast<int>(mask.dims()[1]) / groups;
+    // int out_step = static_cast<int>(output->dims()[1]) / groups;
+
+    int input_dim = input->numel() / input->dims()[0];
+    int input_offset_dim = offset.numel() / offset.dims()[0];
+    int input_mask_dim = mask.numel() / mask.dims()[0];
+
 
     auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
 
+    for (int i = 0; i < batch_size / im2col_step; i++) {
+      //Tensor in_batch = input->Slice(i, i + 1).Resize(input_shape);
+      //Tensor offset_batch = offset.Slice(i, i + 1).Resize(offset_shape);
+      //Tensor mask_batch = mask.Slice(i, i + 1).Resize(mask_shape);
+      //Tensor out_batch = output->Slice(i, i + 1).Resize(output_matrix_shape);
 
+      modulated_deformable_im2col(dev_ctx,
+          input->data<T>() + i * im2col_step * input_dim,
+          offset_batch.data<T>() + n * im2col_step * input_offset_dim,
+          mask_batch.data<T>() + n * im2col_step * input_mask_dim,
+          input_shape_vec, col_buffer_shape_vec,
+          filter_shape_vec, paddings, strides, dilations,
+          deforamble_groups, col_buffer.mutable_data<T>(ctx.Getplace()));
 
-    for (int i = 0; i < batch_size; i++) {
-      Tensor in_batch = input->Slice(i, i + 1).Resize(input_shape);
-      Tensor offset_batch = offset.Slice(i, i + 1).Resize(offset_shape);
-      Tensor mask_shape = mask.Slice(i, i + 1).Resize(mask_shape);
-      Tensor out_batch = output->Slice(i, i + 1).Resize(output_matrix_shape);
-
+      Tensor output_3d = 
+          output_4d.Slice(i, i + 1).Resize(
+              framework::slice_ddim(output_4d.dims(), 1, output_4d.dims().size()));
       for (int g = 0; g < groups; g++){
-        Tensor in_slice = in_batch.Slice(g * in_step, (g + 1) * in_step);
-        Tensor offset_slice = offset_batch.Slice(g * offset_step,
-                                                 (g + 1) * offset_step);
-        Tensor mask_slice = mask_batch.Slice(g * mask_step,
-                                                 (g + 1) * mask_step);
-        int num_kernels = in_slice.dims()[0]  * out_batch.numel()
-                          / out_batch.dims()[0];
-        int blocks = NumBlocks(num_kernels);
-        int threads = kNumCUDAThreads;
-        size_t channel_per_deformable_group = in_step / deformable_groups;
-
-        // im2col
-        // TODO: Need to check no expand is correct
-        modulated_deformable_im2col<T><<<blocks,
-            threads, 0, dev_ctx.stream()>>>(num_kernels,
-                                            in_slice.data<T>(),
-                                            offset_slice.data<T>(),
-                                            mask_slice.data<T>(),
-                                            in_slice.dims[1],
-                                            in_slice.dims[2],
-                                            filter_shape_vec[2],
-                                            filter_shape_vec[3],
-                                            paddings[0],
-                                            paddings[1],
-                                            strides[0],
-                                            strides[1],
-                                            dilations[0],
-                                            dilations[1],
-                                            output_shape_vec[2],
-                                            output_shape_vec[3],
-                                            deformable_groups,
-                                            channel_per_deformable_group,
-                                            &col);
-
+        Tensor weight_3d_slice = 
+            weight_3d.Slice(g, g + 1).Resize(
+                framework::slice_ddim(weight_3d.dims(), 1, weight_3d.dims().size()));
+        Tensor col_buffer_3d_slice =
+            col_buffer_3d.Slice(g, g + 1).Resize(
+              framework::slice_ddim(col_buffer_3d.dims(), 1, col_buffer_3d.dims().size()));
+        Tensor output_3d_slice =
+            output_3d.Slice(g, g + 1).Resize(
+                framework::slice_ddim(output_3d.dims(), 1, output_3d.dims().size()));
         // gemm
-        Tensor out_slice = out_batch.Slice(g * out_step, (g + 1) * out_step);
-        Tensor filter_slice = filter.Slice(g * out_step, (g + 1) * out_step);
-        blas.MatMul(filter_slice, false, col_matrix, false, T(1.0), &out_slice,
-                    T(0.0));
+        //Tensor out_slice = out_batch.Slice(g * out_step, (g + 1) * out_step);
+        //Tensor filter_slice = filter.Slice(g * out_step, (g + 1) * out_step);
+
+        blas.MatMul(weight_3d_slice, false, col_buffer_3d_slice, false, T(1.0), 
+                    &output_3d_slice, T(0.0));
       }
     }
+    Tensor trans_output_4d;
+    trans_output_4d.ShareDataWith(output_buffer);
+    framework::DDim trans_output_4d_shape = {batch_size / im2col_step, filter_shape_vec[0],
+        im2col_step, output_shape_vec[2] * output_shape_vec[3]};
+    trans_output_4d.Resize(trans_output_4d_shape);
+    
+    Tensor origin_output_4d;
+    origin_output_4d.ShareDataWith(*output);
+    framework::DDim origin_output_4d_shape = {batch_size / im2col_step, im2col_step,
+        filter_shape_vec[0], output_shape_vec[2] * output_shape_vec[3]};
+    //swap axis
+    origin_output_4d = trans_output_4d.Resize(origin_output_4d_shape);
     //TODO: check bias
   }
 };
 
 template <typename DeviceContext, typename T>
-class TreeConvGradKernel : public framework::OpKernel<T> {
+class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext &ctx) const override {
-    auto *out_g = ctx.Input<Tensor>(framework::GradVarName("Out"));
-    auto *in_g = ctx.Output<Tensor>(framework::GradVarName("NodesVector"));
-    auto *filter_g = ctx.Output<Tensor>(framework::GradVarName("Filter"));
-    int max_depth = ctx.Attr<int>("max_depth");
-    auto *Embeddings = ctx.Input<Tensor>("NodesVector");
-    auto *edges = ctx.Input<Tensor>("EdgeSet");
-    auto *Filter = ctx.Input<Tensor>("Filter");
-    math::Tree2ColFunctor<DeviceContext, T> tree2col;
-    math::Col2TreeFunctor<DeviceContext, T> col2tree;
-    math::SetConstant<DeviceContext, T> constant;
-    auto &dev_ctx = ctx.template device_context<DeviceContext>();
+    const Tensor* output_grad =
+        ctx.Input<Tensor>(framework::GradVarName("Output"));
+    Tensor* intput_grad = ctx.Output<Tensor>(framework::GradVarName("Input"));
+    Tensor* filter_grad = ctx.Output<Tensor>(framework::GradVarName("Filter"));
+    Tensor* offset_grad = ctx.Output<Tensor>(framework::GradVarName("Offset"));
+    Tensor* mask_grad = ctx.Output<Tensor>(framework::GradVarName("mask"));
+
+    const Tensor* input = ctx.Input<Tensor>("Input");
+    Tensor offset = *ctx.Input<Tensor>("Offset");
+    Tensor mask = *ctx.Input<Tensor>("Mask");
+    Tensor filter = *ctx.Input<Tensor>("Filter");
+
+    if (!input_grad && !filter_grad && !offset_grad && !mask_grad) return;
+
+    int groups = ctx.Attr<int>("groups");
+    int deformable_groups = ctx.Attr<int>("deformable_groups");
+    int im2col_step = ctx.Attr<int>("im2col_step");
+    std::vector<int> strides = ctx.Attr<std::vector<int>>("strides");
+    std::vector<int> paddings = ctx.Attr<std::vector<int>>("paddings");
+    std::vector<int> dilations = ctx.Attr<std::vector<int>>("dilations");
+
+    auto &dev_ctx = ctx.cuda_device_context();
+    const int batch_size = static_cast<int>(input->dims()[0]);
+
+    framework::DDim input_shape =
+        framework::slice_ddim(input->dims(), 1, input->dims().size());
+    std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
+
+    // filter_shape_vec: {c_o, c_i, k_h, k_w}
+    std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
+    // output_shape_vec: {n, o_c, o_h, o_w}
+    std::vector<int64_t> output_shape_vec(framework::vectorize(output_grad->dims()));
+
+    // get col_shape in the im2col calculation
+    size_t data_dim = filter_shape_vec.size() - 2;
+    // col_buffer_shape_vec {c_i * k_h * k_w, im2col_step, o_h, o_w}
+    std::vector<int64_t> col_buffer_shape_vec(data_dim + 2);
+    col_buffer_shape_vec[0] = input->dims[1] * filter.dims()[2] * filter.dims()[3];
+    col_buffer_shape_vec[1] = im2col_step;
+    for (size_t j = 0; j < data_dim; ++j) {
+      col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
+    }
+    framework::DDim col_shape(framework::make_ddim(col_buffer_shape_vec));
+    std::vector<int64_t> output_buffer_shape_vec(1);
+    output_buffer_shape_vec[0] = batch_size * filter_shape_vec[0]
+                                 * output_shape_vec[2] * output_shape_vec[3];
+    Tensor col_buffer;
+    Tensor output_buffer;
+    col_buffer = ctx.AllocateTmpTensor<T, DeviceContext>(col_shape, dev_ctx);
+    output_buffer = ctx.AllocateTmpTensor<T, DeviceContext>(output_shape, dev_ctx);
+
+    Tensor trans_output_4d;
+    framework::DDim trans_output_4d_shape = {batch_size / im2col_step, filter_shape_vec[0],
+      im2col_step, output_shape_vec[2] * output_shape_vec[3]};
+    trans_output_4d.ShareDataWith(output_buffer);
+    trans_output_4d.Reisze(trans_output_4d_shape)
+
+    Tensor origin_output_4d;
+    framework::DDim origin_output_4d_shape = {batch_size / im2col_step, im2col_step,
+       filter_shape_vec[0], output_shape_vec[2] * output_shape_vec[3]};
+    origin_output_4d.ShareDataWith(*output_grad);
+    trans_output_4d = origin_output_4d.Reisze(trans_output_4d_shape);
+
+    math::SetConstant<DeviceContext, T> set_zero;
     auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
 
-    Tensor W;
-    W.ShareDataWith(*Filter);
-    W.Resize(framework::flatten_to_2d(Filter->dims(), 1));
+    int64_t M = filter_shape_vec[0] / groups; 
+    int64_t N = im2col_step * output_shape_vec[2] * output_shape_vec[3];
+    int64_t K = filter_shape_vec[1] * filter_shape_vec[2] * filter_shape_vec[3]
+                / groups;
 
-    int batch_size = static_cast<int>(Embeddings->dims()[0]);
+    framework::DDim weight_3d_shape = {groups, K, M};
+    framework::DDim out_grad_4d_shape = {batch_size / im2col_step, groups, K, N};
+    framework::DDim col_buffer_3d_shape = {groups, M, N};
+    framework::DDim dweight_3d_shape = {groups, K, M};
+    framework::DDim data_grad_shape = {input_grad->numel()};
 
-    auto edge_set_slicedim = framework::slice_ddim(
-        edges->dims(), 1, static_cast<int>(edges->dims().size()));
+    Tensor weight_3d;
+    weight_3d.ShareDataWith(filter);
+    weight_3d.Resize(weight_3d_shape);
+    Tensor out_grad_4d;
+    out_grad_4d.ShareDataWith(output_buffer);
+    out_grad_4d.Reisze(out_grad_4d_shape);
+    Tensor col_buffer_3d;
+    col_buffer_3d.ShareDataWith(col_buffer);
+    col_buffer_3d.Reisze(col_buffer_3d_shape);
+    Tensor dweight_3d;
+    dweight_3d.ShareDataWith(*filter_grad);
+    dweight_3d.Reisze(dweight_3d_shape);
+    Tensor data_grad;
+    data_grad.ShareDataWith(*input_grad);
+    data_grad.Resize(data_grad_shape);
 
-    auto embedding_slicedim = framework::slice_ddim(
-        Embeddings->dims(), 1, static_cast<int>(Embeddings->dims().size()));
+    set_zero(dev_ctx, data_grad, static_cast<T>(0));
+    
 
-    auto out_grad_dims = framework::slice_ddim(
-        out_g->dims(), 1, static_cast<int>(out_g->dims().size()));
-    out_grad_dims = framework::flatten_to_2d(out_grad_dims, 1);
-    if (filter_g) {
-      filter_g->mutable_data<T>(Filter->dims(), ctx.GetPlace());
-      Tensor f_g;
-      f_g.ShareDataWith(*filter_g);
-      f_g.Resize(framework::flatten_to_2d(Filter->dims(), 2));
-      constant(dev_ctx, filter_g, 0);
-      for (int batch_id = 0; batch_id < batch_size; batch_id++) {
-        auto edge_set =
-            edges->Slice(batch_id, batch_id + 1).Resize(edge_set_slicedim);
-        auto embeddings = Embeddings->Slice(batch_id, batch_id + 1)
-                              .Resize(embedding_slicedim);
-        auto out_grad =
-            out_g->Slice(batch_id, batch_id + 1).Resize(out_grad_dims);
-        Tensor patch;
-        tree2col(dev_ctx, edge_set, embeddings, &patch, max_depth);
-        blas.MatMul(patch, true, out_grad, false, T(1.0), &f_g, T(1.0));
+    // int in_step = static_cast<int>(input->dims()[1]) / groups;
+    // int out_step = static_cast<int>(output_grad->dims()[1]) / groups;
+
+    // // input {c_i, i_h, i_w}
+    // framework::DDim input_shape =
+    // framework::slice_ddim(input->dims(), 1, input->dims().size());
+
+    // framework::DDim offset_shape =
+    // framework::slice_ddim(offset_grad->dims(), 1, offset_grad->dims().size());
+
+    // framework::DDim mask_shape =
+    // framework::slice_ddim(mask_grad->dims(), 1, mask_grad->dims().size());
+
+    int input_dim = input->numel() / input->dims()[0];
+    int input_offset_dim = offset.numel() / offset.dims()[0];
+    int input_mask_dim = mask.numel() / mask.dims()[0];
+
+
+    for(int i = 0; i < batch_size / im2col_step; i++) {
+      Tensor out_grad_3d =
+          out_grad_4d.Slice(i, i + 1).Resize(
+            framework::slice_ddim(out_grad_4d.dims(), 1, out_grad_4d.dims().size()));
+      for (int g = 0; g < groups; g++) {
+        // Tensor filter_slice = filter.Slice(g * out_step, (g + 1) * out_step);
+        // Tensor output_grad_slice = 
+        //     output_grad_batch.Slice(g * out_step, (g + 1) * out_step);
+        Tensor weight_3d_slice = weight_3d.Slice(g, g + 1).Reisze(
+          framework::slice_ddim(weight_3d.dims(), 1, weight_3d.dims().size()));
+        Tensor out_grad_3d_slice = out_grad_3d.Slice(g, g + 1).Reisze(
+          framework::slice_ddim(out_grad_3d.dims(), 1, out_grad_3d.dims().size()));
+        Tensor col_buffer_3d_slice = col_buffer_3d.Slice(g, g + 1).Reisze(
+          framework::slice_ddim(col_buffer_3d.dims(), 1, col_buffer_3d.dims().size()));
+        blas.MatMul(weight_3d_slice, true, out_grad_3d_slice, false, T(1.0),
+                    &col_buffer_3d_slice, T(0.0));
+        }
+      modulated_deformable_col2im_coord(
+          dev_ctx, col_buffer.data<T>(),
+          input->data<T>() + i * im2col_step * input_dim,
+          offset.data<T>() + i * im2col_step * input_offset_dim,
+          mask.data<T>() + i * im2col_step * input_mask_dim,
+          input_shape_vec, col_buffer_shape_vec,
+          filter_shape_vec, paddings, strides, dilations, num_deformable_group,
+          offset_grad->mutable_data<T>(ctx.GetPlace()) 
+              + i * im2col_step * input_offset_dim,
+          mask_grad->multable_data<T>(ctx.GetPlace())
+              + i * im2col_step * input_mask_dim);
+
+      modulated_deformable_col2im(
+          dev_ctx, col_buffer.data<T>(),
+          offset.data<T>() + i * im2col_step * input_offset_dim,
+          mask.data<T>() + i * im2col_step * input_mask_dim,
+          input_shape_vec, col_buffer_shape_vec,
+          filter_shape_vec, paddings, strides, dilations, num_deformable_group,
+          col_buffer.mutable_data<T>(ctx.GetPlace()));
+
+      deformable_im2col(
+          dev_ctx, 
+          input->data<T>() + i * im2col_step * input_dim,
+          offset.data<T>() + i * im2col_step * input_offset_dim,
+          mask_batch.data<T>() + i * im2col_step * input_mask_dim,
+          input_shape_vec, col_shape, filter_shape_vec,
+          paddings, strides, dilations, num_deformable_group, col_buffer.data<T>());
+
+      for (int g = 0, g < groups, g++) {
+        Tensor out_grad_3d_slice = out_grad_3d.Slice(g, g + 1).Reisze(
+          framework::slice_ddim(out_grad_3d.dims(), 1, out_grad_3d.dims().size()));
+        Tensor col_buffer_3d_slice = col_buffer_3d.Slice(g, g + 1).Reisze(
+          framework::slice_ddim(col_buffer_3d.dims(), 1, col_buffer_3d.dims().size()));
+        Tensor dweight_3d_slice = dweight_3d.Slice(g, g + 1).Reisze(
+          framework::slice_ddim(dweight_3d.dims(), 1, dweight_3d.dims().size()));
+        blas.MatMul(out_grad_3d_slice, false, col_buffer_3d_slice, true, T(1.0),
+                    dweight_3d_slice, T(0.0));
       }
     }
-    if (in_g) {
-      auto input_grad_dims = framework::slice_ddim(
-          in_g->dims(), 1, static_cast<int>(in_g->dims().size()));
-      in_g->mutable_data<T>(Embeddings->dims(), ctx.GetPlace());
-      constant(dev_ctx, in_g, 0);
-      for (int batch_id = 0; batch_id < batch_size; batch_id++) {
-        auto edge_set =
-            edges->Slice(batch_id, batch_id + 1).Resize(edge_set_slicedim);
-        auto out_grad =
-            out_g->Slice(batch_id, batch_id + 1).Resize(out_grad_dims);
-        auto in_grad =
-            in_g->Slice(batch_id, batch_id + 1).Resize(input_grad_dims);
-        Tensor in_grad_temp;
-        col2tree(dev_ctx, edge_set, out_grad, &in_grad_temp, max_depth);
-        blas.MatMul(in_grad_temp, false, W, true, &in_grad);
-      }
-    }
+    // bias
+  }
+}
+
   }
 };
 
