@@ -503,7 +503,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
           mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_buffer_shape_vec,
           filter_shape_vec, paddings, strides, dilations,
-          deforamble_groups, col_buffer.mutable_data<T>(ctx.Getplace()));
+          deformable_groups, col_buffer.mutable_data<T>(ctx.GetPlace()));
 
       Tensor output_3d = 
           output_4d.Slice(i, i + 1).Resize(
@@ -548,7 +548,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
   void Compute(const framework::ExecutionContext &ctx) const override {
     const Tensor* output_grad =
         ctx.Input<Tensor>(framework::GradVarName("Output"));
-    Tensor* intput_grad = ctx.Output<Tensor>(framework::GradVarName("Input"));
+    Tensor* input_grad = ctx.Output<Tensor>(framework::GradVarName("Input"));
     Tensor* filter_grad = ctx.Output<Tensor>(framework::GradVarName("Filter"));
     Tensor* offset_grad = ctx.Output<Tensor>(framework::GradVarName("Offset"));
     Tensor* mask_grad = ctx.Output<Tensor>(framework::GradVarName("mask"));
@@ -584,7 +584,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     // col_buffer_shape_vec {c_i * k_h * k_w, im2col_step, o_h, o_w}
     std::vector<int64_t> col_buffer_shape_vec(data_dim + 2);
     col_buffer_shape_vec[0] =
-        input->dims[1] * filter.dims()[2] * filter.dims()[3];
+        input->dims()[1] * filter.dims()[2] * filter.dims()[3];
     col_buffer_shape_vec[1] = im2col_step;
     for (size_t j = 0; j < data_dim; ++j) {
       col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
@@ -593,6 +593,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     std::vector<int64_t> output_buffer_shape_vec(1);
     output_buffer_shape_vec[0] = batch_size * output_shape_vec[1]
                                  * output_shape_vec[2] * output_shape_vec[3];
+    framework::DDim output_shape(framework::make_ddim(output_buffer_shape_vec));
     Tensor col_buffer;
     Tensor output_buffer;
     col_buffer = ctx.AllocateTmpTensor<T, DeviceContext>(col_shape, dev_ctx);
@@ -602,7 +603,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     framework::DDim trans_output_4d_shape = {batch_size / im2col_step, filter_shape_vec[0],
       im2col_step, output_shape_vec[2] * output_shape_vec[3]};
     trans_output_4d.ShareDataWith(output_buffer);
-    trans_output_4d.Resize(trans_output_4d_shape)
+    trans_output_4d.Resize(trans_output_4d_shape);
 
     Tensor origin_output_4d;
     framework::DDim origin_output_4d_shape = {batch_size / im2col_step, im2col_step,
@@ -666,10 +667,10 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_buffer_shape_vec,
-          filter_shape_vec, paddings, strides, dilations, num_deformable_group,
+          filter_shape_vec, paddings, strides, dilations, deforamble_groups,
           offset_grad->mutable_data<T>(ctx.GetPlace()) 
               + i * im2col_step * input_offset_dim,
-          mask_grad->multable_data<T>(ctx.GetPlace())
+          mask_grad->mutable_data<T>(ctx.GetPlace())
               + i * im2col_step * input_mask_dim);
 
       modulated_deformable_col2im(
@@ -677,16 +678,16 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_buffer_shape_vec,
-          filter_shape_vec, paddings, strides, dilations, num_deformable_group,
+          filter_shape_vec, paddings, strides, dilations, deforamble_groups,
           col_buffer.mutable_data<T>(ctx.GetPlace()));
 
       modulated_deformable_im2col(
           dev_ctx, 
           input->data<T>() + i * im2col_step * input_dim,
           offset.data<T>() + i * im2col_step * input_offset_dim,
-          mask_batch.data<T>() + i * im2col_step * input_mask_dim,
+          mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_shape, filter_shape_vec,
-          paddings, strides, dilations, num_deformable_group,
+          paddings, strides, dilations, deforamble_groups,
           col_buffer.mutable_data<T>(ctx.GetPlace()));
 
       for (int g = 0, g < groups, g++) {
