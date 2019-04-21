@@ -21,7 +21,7 @@ class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker 
   void Make() override {
     AddInput("Input",
              "(Tensor) The input of modulated deformable conv op. "
-             "The format of input is NCHW"
+             "The format of input is NCHW");
     AddInput("Offset",
              "(Tensor) The input offset. "
              "The shape of the offset is "
@@ -37,7 +37,7 @@ class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker 
     AddInput("Bias",
              "(Tensor) The Input Bias "
              "The shape of the bias is "
-             "[num_filters, ].");
+             "[num_filters, ].")
         .AsDispensable();
     AddOutput("Output",
               "(Tensor) The output. "
@@ -141,7 +141,7 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
 
     if(in_dims[0] > im2col_step) {
         PADDLE_ENFORCE_EQ(in_dims[0] % im2col_step, 0U,
-            "Input batchsize must be smaller than or divide im2col_step";
+            "Input batchsize must be smaller than or divide im2col_step");
     }
 
     for (size_t i = 0; i < strides.size(); ++i) {
