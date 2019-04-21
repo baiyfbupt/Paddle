@@ -613,9 +613,6 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     origin_output_4d.ShareDataWith(*output_grad);
     trans_output_4d = origin_output_4d.Resize(trans_output_4d_shape);
 
-    math::SetConstant<DeviceContext, T> set_zero;
-    auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
-
     int64_t M = input_shape_vec[0] / groups; 
     int64_t N = im2col_step * output_shape_vec[2] * output_shape_vec[3];
     int64_t K = filter_shape_vec[1] * filter_shape_vec[2] * filter_shape_vec[3]
@@ -643,7 +640,10 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     data_grad.ShareDataWith(*input_grad);
     data_grad.Resize(data_grad_shape);
 
-    set_zero(dev_ctx, data_grad, static_cast<T>(0));
+    math::SetConstant<DeviceContext, T> set_zero;
+    auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
+
+    set_zero(dev_ctx, &data_grad, static_cast<T>(0));
 
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
@@ -700,7 +700,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
         Tensor dweight_3d_slice = dweight_3d.Slice(g, g + 1).Resize(
           framework::slice_ddim(dweight_3d.dims(), 1, dweight_3d.dims().size()));
         blas.MatMul(out_grad_3d_slice, false, col_buffer_3d_slice, true, T(1.0),
-                    dweight_3d_slice, T(0.0));
+                    &dweight_3d_slice, T(0.0));
       }
     }
     // bias
