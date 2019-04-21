@@ -278,7 +278,7 @@ inline void modulated_deformable_col2im_coord(
 
   int num_kernels = 2 * filter_shape_vec[2] * filter_shape_vec[3]
                     * col_shape[1] * col_shape[2] * col_shape[3]
-                    * deforamble_groups;
+                    * deformable_groups;
   int channel_per_deformable_group = col_shape[0] / deformable_groups;
   int blocks = NumBlocks(num_kernels);
   int threads = kNumCUDAThreads;
@@ -289,8 +289,8 @@ inline void modulated_deformable_col2im_coord(
     in_shape[2], filter_shape_vec[2], filter_shape_vec[3], paddings[0],
     paddings[1], strides[0], strides[1], dilations[0], dilations[1],
     channel_per_deformable_group, col_shape[1], 
-    2 * filter_shape_vec[2] * filter_shape_vec[3] * deforamble_groups,
-    deforamble_groups, col_shape[2], col_shape[3],
+    2 * filter_shape_vec[2] * filter_shape_vec[3] * deformable_groups,
+    deformable_groups, col_shape[2], col_shape[3],
     grad_offset, grad_mask);
 }
 
@@ -487,7 +487,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     // // input {c_i, i_h, i_w}
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
-    std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
+    std::vector<int> input_shape_vec = framework::vectorize(input_shape);
 
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
@@ -667,7 +667,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_buffer_shape_vec,
-          filter_shape_vec, paddings, strides, dilations, deforamble_groups,
+          filter_shape_vec, paddings, strides, dilations, deformable_groups,
           offset_grad->mutable_data<T>(ctx.GetPlace()) 
               + i * im2col_step * input_offset_dim,
           mask_grad->mutable_data<T>(ctx.GetPlace())
@@ -678,7 +678,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_buffer_shape_vec,
-          filter_shape_vec, paddings, strides, dilations, deforamble_groups,
+          filter_shape_vec, paddings, strides, dilations, deformable_groups,
           col_buffer.mutable_data<T>(ctx.GetPlace()));
 
       modulated_deformable_im2col(
@@ -686,11 +686,11 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           input->data<T>() + i * im2col_step * input_dim,
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
-          input_shape_vec, col_shape, filter_shape_vec,
-          paddings, strides, dilations, deforamble_groups,
+          input_shape_vec, col_buffer_shape_vec, filter_shape_vec,
+          paddings, strides, dilations, deformable_groups,
           col_buffer.mutable_data<T>(ctx.GetPlace()));
 
-      for (int g = 0, g < groups, g++) {
+      for (int g = 0; g < groups; g++) {
         Tensor out_grad_3d_slice = out_grad_3d.Slice(g, g + 1).Resize(
           framework::slice_ddim(out_grad_3d.dims(), 1, out_grad_3d.dims().size()));
         Tensor col_buffer_3d_slice = col_buffer_3d.Slice(g, g + 1).Resize(
