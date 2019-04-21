@@ -715,9 +715,9 @@ using CUDA = paddle::platform::CUDADeviceContext;
 
 REGISTER_OP_CUDA_KERNEL(
     modulated_deformable_conv,
-    ops::ModulatedDeformableConvCUDAKernel<CUDA, float>,
-    ops::ModulatedDeformableConvCUDAKernel<CUDA, double>);
+    ops::ModulatedDeformableConvCUDAKernel<CUDA, float>);
+    //ops::ModulatedDeformableConvCUDAKernel<CUDA, double>);
 REGISTER_OP_CUDA_KERNEL(
     modulated_deformable_conv_grad,
-    ops::ModulatedDeformableConvGradCUDAKernel<CUDA, float>,
-    ops::ModulatedDeformableConvGradCUDAKernel<CUDA, double>);
+    ops::ModulatedDeformableConvGradCUDAKernel<CUDA, float>);
+    //ops::ModulatedDeformableConvGradCUDAKernel<CUDA, double>);
