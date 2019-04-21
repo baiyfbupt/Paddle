@@ -294,38 +294,6 @@ inline void modulated_deformable_col2im_coord(
     grad_offset, grad_mask);
 }
 
-// im_shape {c_i, i_h, i_w}
-// col_shape {c_in * k_h * k_w, im2col_step, o_h, o_w}
-// filter_shape {c_o, c_i, k_h, k_w}
-// paddings {p_h, p_w}
-// strides {s_h, s_w}
-// dilations {d_h, d_w}
-template <typename T>
-inline void modulated_deformable_im2col(
-    const paddle::platform::CUDADeviceContext ctx,
-    //const framework::ExecutionContext& ctx,
-    const T* data_im, const T* data_offset,
-    const T* data_mask, std::vector<int64_t>im_shape,
-    std::vector<int64_t>col_shape, std::vector<int64_t>filter_shape,
-    const std::vector<int>paddings, const std::vector<int>strides,
-    const std::vector<int>dilations, const int deformable_groups,
-    T* data_col) {
-      // {c_i / deformable_group}
-      int channel_per_deformable_group = im_shape[0] / deformable_groups;
-      // {c_i * o_h * o_w}
-      int num_kernels = im_shape[0] * col_shape[1] * col_shape[2] * col_shape[3];
-
-      int blocks = NumBlocks(num_kernels);
-      int threads = kNumCUDAThreads;
-
-      modulated_deformable_im2col_gpu_kernel<T><<<blocks, threads, 0,
-          ctx.cuda_device_context().stream()>>>(
-          num_kernels, data_im, data_offset, data_mask, im_shape[1], im_shape[2],
-          filter_shape[2], filter_shape[3], paddings[0], paddings[1],
-          strides[0], strides[1], dilations[0], dilations[1],
-          channel_per_deformable_group, col_shape[1], im_shape[0], 
-          deformable_groups, col_shape[2], col_shape[3], data_col);
-    }
 
 template <typename T>
 __device__ T dmcn_im2col_bilinear(const T* bottom_data, const int data_width,
@@ -420,6 +388,40 @@ __global__ void modulated_deformable_im2col_gpu_kernel(
     }
   }
 }
+
+// im_shape {c_i, i_h, i_w}
+// col_shape {c_in * k_h * k_w, im2col_step, o_h, o_w}
+// filter_shape {c_o, c_i, k_h, k_w}
+// paddings {p_h, p_w}
+// strides {s_h, s_w}
+// dilations {d_h, d_w}
+template <typename T>
+inline void modulated_deformable_im2col(
+    const paddle::platform::CUDADeviceContext ctx,
+    //const framework::ExecutionContext& ctx,
+    const T* data_im, const T* data_offset,
+    const T* data_mask, std::vector<int64_t>im_shape,
+    std::vector<int64_t>col_shape, std::vector<int64_t>filter_shape,
+    const std::vector<int>paddings, const std::vector<int>strides,
+    const std::vector<int>dilations, const int deformable_groups,
+    T* data_col) {
+      // {c_i / deformable_group}
+      int channel_per_deformable_group = im_shape[0] / deformable_groups;
+      // {c_i * o_h * o_w}
+      int num_kernels = im_shape[0] * col_shape[1] * col_shape[2] * col_shape[3];
+
+      int blocks = NumBlocks(num_kernels);
+      int threads = kNumCUDAThreads;
+
+      modulated_deformable_im2col_gpu_kernel<T><<<blocks, threads, 0,
+          ctx.cuda_device_context().stream()>>>(
+          num_kernels, data_im, data_offset, data_mask, im_shape[1], im_shape[2],
+          filter_shape[2], filter_shape[3], paddings[0], paddings[1],
+          strides[0], strides[1], dilations[0], dilations[1],
+          channel_per_deformable_group, col_shape[1], im_shape[0], 
+          deformable_groups, col_shape[2], col_shape[3], data_col);
+    }
+
 
 
 template <typename DeviceContext, typename T>
