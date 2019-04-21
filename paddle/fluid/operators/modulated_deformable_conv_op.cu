@@ -305,7 +305,7 @@ inline void modulated_deformable_im2col(
     const framework::ExecutionContext& ctx,
     const T* data_im, const T* data_offset,
     const T* data_mask, const std::vector<int>im_shape,
-    const std::vector<int>col_shape, const std::vector<int>filter_shape,
+    std::vector<int>col_shape, const std::vector<int>filter_shape,
     const std::vector<int>paddings, const std::vector<int>strides,
     const std::vector<int>dilations, const int deformable_groups,
     T* data_col) {
@@ -427,8 +427,8 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
   void Compute(const framework::ExecutionContext &ctx) const override {
 
     const Tensor* input = ctx.Input<Tensor>("Input");
-    Tensor offset = *ctx.Input<Tensor>("Offset");
-    Tensor mask = *ctx.Input<Tensor>("Mask");
+    const Tensor offset = *ctx.Input<Tensor>("Offset");
+    const Tensor mask = *ctx.Input<Tensor>("Mask");
     Tensor filter = *ctx.Input<Tensor>("Filter");
     Tensor* output = ctx.Output<Tensor>("Output");
     output->mutable_data<T>(ctx.GetPlace());
@@ -436,23 +436,23 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     int groups = ctx.Attr<int>("groups");
     int deformable_groups = ctx.Attr<int>("deformable_groups");
     int im2col_step = ctx.Attr<int>("im2col_step");
-    std::vector<int> strides = ctx.Attr<std::vector<int>>("strides");
-    std::vector<int> paddings = ctx.Attr<std::vector<int>>("paddings");
-    std::vector<int> dilations = ctx.Attr<std::vector<int>>("dilations");
+    const std::vector<int> strides = ctx.Attr<std::vector<int>>("strides");
+    const std::vector<int> paddings = ctx.Attr<std::vector<int>>("paddings");
+    const std::vector<int> dilations = ctx.Attr<std::vector<int>>("dilations");
 
     auto &dev_ctx = ctx.cuda_device_context();
 
     const int batch_size = static_cast<int>(input->dims()[0]);
 
     // filter_shape_vec: {c_o, c_i, k_h, k_w}
-    std::vector<int> filter_shape_vec(framework::vectorize(filter.dims()));
+    const std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
     // output_shape_vec: {n, o_c, o_h, o_w}
-    std::vector<int> output_shape_vec(framework::vectorize(output->dims()));
+    const std::vector<int64_t> output_shape_vec(framework::vectorize(output->dims()));
 
     // filter_shape_vec.size(): 4
     // col_shape_vec: {c_i * k_h * k_w, im2col_step, o_h, o_w}
     size_t data_dim = filter_shape_vec.size() - 2;
-    std::vector<int> col_buffer_shape_vec(2 + data_dim);
+    std::vector<int64_t> col_buffer_shape_vec(2 + data_dim);
     //c_i * k_w * k_h /
     col_buffer_shape_vec[0] = input->dims()[1] * filter.dims()[2] * filter.dims()[3];
     col_buffer_shape_vec[1] = im2col_step;
@@ -460,7 +460,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
       col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
     }
     framework::DDim col_shape(framework::make_ddim(col_buffer_shape_vec));
-    std::vector<int> output_buffer_shape_vec(1);
+    std::vector<int64_t> output_buffer_shape_vec(1);
     output_buffer_shape_vec[0] = batch_size * output_shape_vec[1]
                            * output_shape_vec[2] * output_shape_vec[3];
     framework::DDim output_shape(framework::make_ddim(output_buffer_shape_vec));
@@ -487,7 +487,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     // // input {c_i, i_h, i_w}
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
-    std::vector<int> input_shape_vec = framework::vectorize(input_shape);
+    const std::vector<int> input_shape_vec = framework::vectorize(input_shape);
 
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
@@ -569,7 +569,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
 
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
-    std::vector<int> input_shape_vec = framework::vectorize(input_shape);
+    std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
 
     // filter_shape_vec: {c_o, c_i, k_h, k_w}
     std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
@@ -579,7 +579,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     // get col_shape in the im2col calculation
     size_t data_dim = filter_shape_vec.size() - 2;
     // col_buffer_shape_vec {c_i * k_h * k_w, im2col_step, o_h, o_w}
-    std::vector<int> col_buffer_shape_vec(data_dim + 2);
+    std::vector<int64_t> col_buffer_shape_vec(data_dim + 2);
     col_buffer_shape_vec[0] =
         input->dims()[1] * filter.dims()[2] * filter.dims()[3];
     col_buffer_shape_vec[1] = im2col_step;
@@ -587,7 +587,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
       col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
     }
     framework::DDim col_shape(framework::make_ddim(col_buffer_shape_vec));
-    std::vector<int> output_buffer_shape_vec(1);
+    std::vector<int64_t> output_buffer_shape_vec(1);
     output_buffer_shape_vec[0] = batch_size * output_shape_vec[1]
                                  * output_shape_vec[2] * output_shape_vec[3];
     framework::DDim output_shape(framework::make_ddim(output_buffer_shape_vec));
