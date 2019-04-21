@@ -14,8 +14,6 @@
 
 #include "paddle/fluid/operators/modulated_deformable_conv_op.h"
 
-#include <vector>
-
 namespace paddle {
 namespace operators {
 class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker {
@@ -72,31 +70,13 @@ class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker 
                               "dilations(h_dilation, w_dilation) of "
                               "convolution operator.")
         .SetDefault({1, 1});
-    AddAttr<bool>(
-        "use_cudnn",
-        "(bool, default false) Only used in cudnn kernel, need install cudnn")
-        .SetDefault(false);
-    AddAttr<std::string>(
-        "data_format",
-        "(string, default NCHW) Only used in "
-        "An optional string from: \"NHWC\", \"NCHW\". "
-        "Defaults to \"NHWC\". Specify the data format of the output data, "
-        "the input will be transformed automatically. ")
-        .SetDefault("AnyLayout");
     AddAttr<int>(
         "im2col_step",
         "im2col maximum number of image per computation")
-        .SetDefault(64)
-    AddAttr<int>("workspace_size_MB",
-                 "Only used in cudnn kernel. Need set use_cudnn to true."
-                 "workspace size for cudnn, in MB, "
-                 "workspace is a section of GPU memory which will be "
-                 "allocated/freed each time the operator runs, larger "
-                 "workspace size can increase performance but also requires "
-                 "better hardware. This size should be chosen carefully.")
-        .SetDefault(1024);
+        .SetDefault(64);
     AddComment(R"DOC(
 **Modulated Deformable Convolution Operator**
+
 https://arxiv.org/abs/1811.11168
 )DOC");
   }
@@ -135,14 +115,14 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
     int im2col_step = ctx->Attrs().Get<int>("im2col_step");
 
 
-    PADDLE_ENFORCE(in_dims.size() == 4 || in_dims.size() == 5,
-                   "Conv intput should be 4-D or 5-D tensor, get %u",
+    PADDLE_ENFORCE(in_dims.size() == 4,
+                   "Conv intput should be 4-D tensor, get %u",
                    in_dims.size());
     PADDLE_ENFORCE_EQ(
         in_dims.size(), filter_dims.size(),
         "Conv input dimension and filter dimension should be the same.");
-    PADDLE_ENFORCE(
-        in_dims.size() - strides.size() == 2U,
+    PADDLE_ENFORCE_EQ(
+        in_dims.size() - strides.size(), 2U,
         "Conv input dimension and strides dimension should be consistent.");
     PADDLE_ENFORCE_EQ(
         paddings.size(), strides.size(),
@@ -297,16 +277,16 @@ REGISTER_OPERATOR(modulated_deformable_conv,
 REGISTER_OPERATOR(modulated_deformable_conv_grad,
                   ops::ModulatedDeformableConvGradOp);
 
-REGISTER_OP_CPU_KERNEL(
-    modulated_deformable_conv,
-    ops::ModulatedDeformableConvKernel<paddle::platform::CPUDeviceContext,
-                                       float>,
-    ops::ModulatedDeformableConvKernel<paddle::platform::CPUDeviceContext,
-                                       double>);
+// REGISTER_OP_CPU_KERNEL(
+//     modulated_deformable_conv,
+//     ops::ModulatedDeformableConvKernel<paddle::platform::CPUDeviceContext,
+//                                        float>,
+//     ops::ModulatedDeformableConvKernel<paddle::platform::CPUDeviceContext,
+//                                        double>);
 
-REGISTER_OP_CPU_KERNEL(
-    modulated_deformable_conv_grad,
-    ops::ModulatedDeformableConvGradKernel<paddle::platform::CPUDeviceContext,
-                                           float>,
-    ops::ModulatedDeformableConvGradKernel<paddle::platform::CPUDeviceContext,
-                                           double>);
+// REGISTER_OP_CPU_KERNEL(
+//     modulated_deformable_conv_grad,
+//     ops::ModulatedDeformableConvGradKernel<paddle::platform::CPUDeviceContext,
+//                                            float>,
+//     ops::ModulatedDeformableConvGradKernel<paddle::platform::CPUDeviceContext,
+//                                            double>);
