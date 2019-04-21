@@ -119,8 +119,8 @@ __global__ void modulated_deformable_col2im_gpu_kernel(const int nthreads,
 
 template<typename T>
 inline void modulated_deformable_col2im(
-  const paddle::platform::CUDADeviceContext ctx,
-  // const framework::ExecutionContext& ctx,
+  // const paddle::platform::CUDADeviceContext ctx,
+  const framework::ExecutionContext& ctx,
   const T* data_col, const T* data_offset, const T* data_mask,
   const std::vector<int> im_shape, const std::vector<int> col_shape,
   const std::vector<int> kernel_shape, const std::vector<int> pad,
@@ -133,7 +133,7 @@ inline void modulated_deformable_col2im(
     int threads = kNumCUDAThreads;
 
     modulated_deformable_col2im_gpu_kernel<T><<<blocks, threads, 0,
-        ctx.stream()>>>(
+        ctx.cuda_device_context().stream()>>>(
       num_kernels, data_col, data_offset, data_mask, im_shape[0],
       im_shape[1], im_shape[2], kernel_shape[2], kernel_shape[3],
       pad[0], pad[1], stride[0], stride[1], dilation[0], dilation[1],
@@ -269,8 +269,8 @@ __global__ void deforamble_col2im_coord_gpu_kernel(const int nthreads,
 
 template <typename T>
 inline void modulated_deformable_col2im_coord(
-    const paddle::platform::CUDADeviceContext ctx,
-    // const framework::ExecutionContext& ctx,
+    // const paddle::platform::CUDADeviceContext ctx,
+    const framework::ExecutionContext& ctx,
     const T* data_col, const T* data_im, const T* data_offset,
     const T* data_mask, const std::vector<int> im_shape,
     const std::vector<int> col_shape, const std::vector<int> kernel_shape,
@@ -286,7 +286,7 @@ inline void modulated_deformable_col2im_coord(
   int threads = kNumCUDAThreads;
 
   deforamble_col2im_coord_gpu_kernel<T><<<blocks, threads, 0,
-      ctx.stream()>>>(
+      ctx.cuda_device_context().stream()>>>(
     num_kernels, data_col, data_im, data_offset, data_mask, in_shape[0], in_shape[1],
     in_shape[2], filter_shape_vec[2], filter_shape_vec[3], paddings[0],
     paddings[1], strides[0], strides[1], dilations[0], dilations[1],
@@ -399,8 +399,8 @@ __global__ void modulated_deformable_im2col_gpu_kernel(
 // dilations {d_h, d_w}
 template <typename T>
 inline void modulated_deformable_im2col(
-    const paddle::platform::CUDADeviceContext ctx,
-    //const framework::ExecutionContext& ctx,
+    // const paddle::platform::CUDADeviceContext ctx,
+    const framework::ExecutionContext& ctx,
     const T* data_im, const T* data_offset,
     const T* data_mask, std::vector<int64_t>im_shape,
     std::vector<int64_t>col_shape, std::vector<int64_t>filter_shape,
@@ -416,7 +416,7 @@ inline void modulated_deformable_im2col(
       int threads = kNumCUDAThreads;
 
       modulated_deformable_im2col_gpu_kernel<T><<<blocks, threads, 0,
-          ctx.stream()>>>(
+          ctx.cuda_device_context.stream()>>>(
           num_kernels, data_im, data_offset, data_mask, im_shape[1], im_shape[2],
           filter_shape[2], filter_shape[3], paddings[0], paddings[1],
           strides[0], strides[1], dilations[0], dilations[1],
@@ -502,7 +502,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
 
     for (int i = 0; i < batch_size / im2col_step; i++) {
-      modulated_deformable_im2col(dev_ctx,
+      modulated_deformable_im2col(ctx,
           input->data<T>() + i * im2col_step * input_dim,
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
@@ -664,7 +664,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
                     &col_buffer_3d_slice, T(0.0));
         }
       modulated_deformable_col2im_coord(
-          dev_ctx, col_buffer.data<T>(),
+          ctx, col_buffer.data<T>(),
           input->data<T>() + i * im2col_step * input_dim,
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
@@ -676,7 +676,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
               + i * im2col_step * input_mask_dim);
 
       modulated_deformable_col2im(
-          dev_ctx, col_buffer.data<T>(),
+          ctx, col_buffer.data<T>(),
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
           input_shape_vec, col_buffer_shape_vec,
@@ -684,7 +684,7 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           col_buffer.mutable_data<T>(ctx.GetPlace()));
 
       modulated_deformable_im2col(
-          dev_ctx, 
+          ctx, 
           input->data<T>() + i * im2col_step * input_dim,
           offset.data<T>() + i * im2col_step * input_offset_dim,
           mask.data<T>() + i * im2col_step * input_mask_dim,
