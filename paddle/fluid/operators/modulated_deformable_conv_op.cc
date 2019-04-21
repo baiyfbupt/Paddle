@@ -158,7 +158,7 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
     }
 
     std::vector<int64_t>output_shape({in_dims[0], filter_dims[0]});
-    for (size_t i = 0; i < strides.size(), ++i) {
+    for (size_t i = 0; i < strides.size(); ++i) {
         output_shape.push_back(ConvOutputSize(in_dims[i + 2],
                                               filter_dims[i + 2],
                                               dilations[i],
@@ -175,10 +175,10 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
         output_shape[3], offset_dims[3],
         "output width must equal to offset map width.");
     PADDLE_ENFORCE_EQ(
-        offset_dims[1] % (filter_dims[2] * filters_dims[3]), 0U,
+        offset_dims[1] % (filter_dims[2] * filter_dims[3]), 0U,
         "offset filter must divide deformable group size.");
     PADDLE_ENFORCE_EQ(
-        offset_dims[1] / (2* filter_dims[2] * filter_dims[3]), 0U
+        offset_dims[1] / (2* filter_dims[2] * filter_dims[3]), 0U,
         "offset filter must divide deformable group size.");
     PADDLE_ENFORCE_EQ(
         output_shape[2], mask_dims[2],
@@ -187,10 +187,10 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
         output_shape[3], mask_dims[3],
         "output width must equal to mask map width.");
     PADDLE_ENFORCE_EQ(
-        mask_dims[1] % (filter_dims[2] * filters_dims[3]), 0U,
+        mask_dims[1] % (filter_dims[2] * filter_dims[3]), 0U,
         "mask filter must divide deformable group size.");
     PADDLE_ENFORCE_EQ(
-        mask_dims[1] / (filter_dims[2] * filter_dims[3]), 0U
+        mask_dims[1] / (filter_dims[2] * filter_dims[3]), 0U,
         "mask filter must divide deformable group size.");
 
     ctx->SetOutputDim("Output", framework::make_ddim(output_shape));
