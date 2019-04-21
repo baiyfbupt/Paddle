@@ -346,7 +346,7 @@ __global__ void modulated_deformable_im2col_gpu_kernel(
     const int h_col = (i / width_col) % height_col;
     const int b_col = (i / width_col) / height_col % batch_size;
     const int c_im = (i / width_col / height_col) / batch_size;
-    const int c_col = c_im * kernel_h * kernel *w;
+    const int c_col = c_im * kernel_h * kernel_w;
 
     // conpute deformable group index
     const int deformable_group_index = c_im / channel_per_deformable_group;
