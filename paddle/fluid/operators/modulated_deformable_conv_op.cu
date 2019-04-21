@@ -122,8 +122,8 @@ inline void modulated_deformable_col2im(
   // const paddle::platform::CUDADeviceContext ctx,
   const platform::DeviceContext& ctx,
   const T* data_col, const T* data_offset, const T* data_mask,
-  const std::vector<int> im_shape, const std::vector<int> col_shape,
-  const std::vector<int> kernel_shape, const std::vector<int> pad,
+  const std::vector<int64_t> im_shape, const std::vector<int64_t> col_shape,
+  const std::vector<int64_t> kernel_shape, const std::vector<int> pad,
   const std::vector<int> stride, const std::vector<int> dilation,
   const int deforamble_group, T* grad_im) {
     int channel_per_deformable_group = im_shape[0] / deforamble_group;
@@ -272,8 +272,8 @@ inline void modulated_deformable_col2im_coord(
     // const paddle::platform::CUDADeviceContext ctx,
     const platform::DeviceContext& ctx,
     const T* data_col, const T* data_im, const T* data_offset,
-    const T* data_mask, const std::vector<int> im_shape,
-    const std::vector<int> col_shape, const std::vector<int> kernel_shape,
+    const T* data_mask, const std::vector<int64_t> im_shape,
+    const std::vector<int64_t> col_shape, const std::vector<int64_t> kernel_shape,
     const std::vector<int> paddings, const std::vector<int> strides,
     const std::vector<int> dilations, const int deformable_groups,
     T* grad_offset, T* grad_mask) {
@@ -402,8 +402,8 @@ inline void modulated_deformable_im2col(
     // const paddle::platform::CUDADeviceContext ctx,
     const platform::DeviceContext& ctx,
     const T* data_im, const T* data_offset,
-    const T* data_mask, std::vector<int64_t>im_shape,
-    std::vector<int64_t>col_shape, std::vector<int64_t>filter_shape,
+    const T* data_mask, const std::vector<int64_t>im_shape,
+    const std::vector<int64_t>col_shape, const std::vector<int64_t>filter_shape,
     const std::vector<int>paddings, const std::vector<int>strides,
     const std::vector<int>dilations, const int deformable_groups,
     T* data_col) {
