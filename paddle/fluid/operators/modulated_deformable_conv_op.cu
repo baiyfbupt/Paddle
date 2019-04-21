@@ -263,9 +263,8 @@ __global__ void deforamble_col2im_coord_gpu_kernel(const int nthreads,
         grad_mask[(((b * deformable_group + deformable_group_index)
             * kernel_h * kernel_w + offset_c / 2) * height_col + h)
                 * width_col + w] = mval;
-
-
   }
+}
 
 template <typename T>
 inline void modulated_deformable_col2im_coord(
@@ -702,9 +701,6 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
       }
     }
     // bias
-  }
-}
-
   }
 };
 
