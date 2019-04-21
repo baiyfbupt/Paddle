@@ -304,8 +304,8 @@ template <typename T>
 inline void modulated_deformable_im2col(
     const framework::ExecutionContext& ctx,
     const T* data_im, const T* data_offset,
-    const T* data_mask, const std::vector<int>im_shape,
-    std::vector<int>col_shape, const std::vector<int>filter_shape,
+    const T* data_mask, std::vector<int>im_shape,
+    std::vector<int>col_shape, std::vector<int>filter_shape,
     const std::vector<int>paddings, const std::vector<int>strides,
     const std::vector<int>dilations, const int deformable_groups,
     T* data_col) {
@@ -445,9 +445,9 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     const int batch_size = static_cast<int>(input->dims()[0]);
 
     // filter_shape_vec: {c_o, c_i, k_h, k_w}
-    const std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
+    std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
     // output_shape_vec: {n, o_c, o_h, o_w}
-    const std::vector<int64_t> output_shape_vec(framework::vectorize(output->dims()));
+    std::vector<int64_t> output_shape_vec(framework::vectorize(output->dims()));
 
     // filter_shape_vec.size(): 4
     // col_shape_vec: {c_i * k_h * k_w, im2col_step, o_h, o_w}
@@ -487,7 +487,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     // // input {c_i, i_h, i_w}
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
-    const std::vector<int> input_shape_vec = framework::vectorize(input_shape);
+    std::vector<int> input_shape_vec = framework::vectorize(input_shape);
 
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
