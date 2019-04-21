@@ -132,7 +132,7 @@ inline void modulated_deformable_col2im(
     int threads = kNumCUDAThreads;
 
     modulated_deformable_col2im_gpu_kernel<T><<<blocks, threads, 0,
-        ctx.cuda_device_context().stream()>>>(
+        ctx.stream()>>>(
       num_kernels, data_col, data_offset, data_mask, im_shape[0],
       im_shape[1], im_shape[2], kernel_shape[2], kernel_shape[3],
       pad[0], pad[1], stride[0], stride[1], dilation[0], dilation[1],
@@ -284,7 +284,7 @@ inline void modulated_deformable_col2im_coord(
   int threads = kNumCUDAThreads;
 
   deforamble_col2im_coord_gpu_kernel<T><<<blocks, threads, 0,
-      ctx.cuda_device_context().stream()>>>(
+      ctx.stream()>>>(
     num_kernels, data_col, data_im, data_offset, data_mask, in_shape[0], in_shape[1],
     in_shape[2], filter_shape_vec[2], filter_shape_vec[3], paddings[0],
     paddings[1], strides[0], strides[1], dilations[0], dilations[1],
@@ -397,8 +397,8 @@ __global__ void modulated_deformable_im2col_gpu_kernel(
 // dilations {d_h, d_w}
 template <typename T>
 inline void modulated_deformable_im2col(
-    const paddle::platform::CUDADeviceContext ctx,
-    //const framework::ExecutionContext& ctx,
+    //const paddle::platform::CUDADeviceContext ctx,
+    const framework::ExecutionContext& ctx,
     const T* data_im, const T* data_offset,
     const T* data_mask, std::vector<int64_t>im_shape,
     std::vector<int64_t>col_shape, std::vector<int64_t>filter_shape,
@@ -414,7 +414,7 @@ inline void modulated_deformable_im2col(
       int threads = kNumCUDAThreads;
 
       modulated_deformable_im2col_gpu_kernel<T><<<blocks, threads, 0,
-          ctx.cuda_device_context().stream()>>>(
+          ctx.stream()>>>(
           num_kernels, data_im, data_offset, data_mask, im_shape[1], im_shape[2],
           filter_shape[2], filter_shape[3], paddings[0], paddings[1],
           strides[0], strides[1], dilations[0], dilations[1],
