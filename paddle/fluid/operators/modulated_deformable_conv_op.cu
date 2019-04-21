@@ -288,10 +288,10 @@ inline void modulated_deformable_col2im_coord(
   deforamble_col2im_coord_gpu_kernel<T><<<blocks, threads, 0,
       reinterpret_cast<const platform::CUDADeviceContext&>(ctx).stream()>>>(
     num_kernels, data_col, data_im, data_offset, data_mask, im_shape[0], im_shape[1],
-    im_shape[2], filter_shape_vec[2], filter_shape_vec[3], paddings[0],
+    im_shape[2], kernel_shape[2], kernel_shape[3], paddings[0],
     paddings[1], strides[0], strides[1], dilations[0], dilations[1],
     channel_per_deformable_group, col_shape[1], 
-    2 * filter_shape_vec[2] * filter_shape_vec[3] * deformable_groups,
+    2 * kernel_shape[2] * kernel_shape[3] * deformable_groups,
     deformable_groups, col_shape[2], col_shape[3],
     grad_offset, grad_mask);
 }
