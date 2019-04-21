@@ -433,9 +433,9 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     Tensor* output = ctx.Output<Tensor>("Output");
     output->mutable_data<T>(ctx.GetPlace());
 
-    int groups = ctx.Attr<int>("groups");
-    int deformable_groups = ctx.Attr<int>("deformable_groups");
-    int im2col_step = ctx.Attr<int>("im2col_step");
+    const int groups = ctx.Attr<int>("groups");
+    const int deformable_groups = ctx.Attr<int>("deformable_groups");
+    const int im2col_step = ctx.Attr<int>("im2col_step");
     const std::vector<int> strides = ctx.Attr<std::vector<int>>("strides");
     const std::vector<int> paddings = ctx.Attr<std::vector<int>>("paddings");
     const std::vector<int> dilations = ctx.Attr<std::vector<int>>("dilations");
