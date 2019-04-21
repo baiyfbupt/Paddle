@@ -302,11 +302,11 @@ inline void modulated_deformable_col2im_coord(
 // dilations {d_h, d_w}
 template <typename T>
 inline void modulated_deformable_im2col(
-    const paddle::platform::CUDADeviceContext,
+    const paddle::platform::CUDADeviceContext ctx,
     //const framework::ExecutionContext& ctx,
     const T* data_im, const T* data_offset,
-    const T* data_mask, std::vector<int>im_shape,
-    std::vector<int>col_shape, std::vector<int>filter_shape,
+    const T* data_mask, std::vector<int64_t>im_shape,
+    std::vector<int64_t>col_shape, std::vector<int64_t>filter_shape,
     const std::vector<int>paddings, const std::vector<int>strides,
     const std::vector<int>dilations, const int deformable_groups,
     T* data_col) {
