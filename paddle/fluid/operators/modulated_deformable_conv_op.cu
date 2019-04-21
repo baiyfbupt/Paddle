@@ -138,8 +138,7 @@ inline void modulated_deformable_col2im(
       pad[0], pad[1], stride[0], stride[1], dilation[0], dilation[1],
       channel_per_deformable_group, col_shape[1], deforamble_group,
       col_shape[2], col_shape[3], grad_im);
-  }
-)
+}
 
 template <typename T>
 __device__ T dmcn_get_coordinate_weight(T argmax_h, T argmax_w,
