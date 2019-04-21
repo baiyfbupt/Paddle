@@ -302,7 +302,8 @@ inline void modulated_deformable_col2im_coord(
 // dilations {d_h, d_w}
 template <typename T>
 inline void modulated_deformable_im2col(
-    const framework::ExecutionContext& ctx,
+    const paddle::platform::CUDADeviceContext,
+    //const framework::ExecutionContext& ctx,
     const T* data_im, const T* data_offset,
     const T* data_mask, std::vector<int>im_shape,
     std::vector<int>col_shape, std::vector<int>filter_shape,
@@ -487,7 +488,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     // // input {c_i, i_h, i_w}
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
-    std::vector<int> input_shape_vec = framework::vectorize(input_shape);
+    std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
 
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
