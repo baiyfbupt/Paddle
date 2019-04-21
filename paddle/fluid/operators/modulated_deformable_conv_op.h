@@ -19,4 +19,5 @@
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/operators/math/blas.h"
 #include "paddle/fluid/operators/math/im2col.h"
+#include "paddle/fluid/platform/cuda_primitives.h"
 
