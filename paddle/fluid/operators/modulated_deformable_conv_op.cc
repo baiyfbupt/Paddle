@@ -13,11 +13,11 @@
 // limitations under the License.
 
 #include "paddle/fluid/operators/conv_op.h"
-// #include "paddle/fluid/operators/modulated_deformable_conv_op.h"
 
 namespace paddle {
 namespace operators {
-class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker {
+class ModulatedDeformableConvOpMaker
+    : public framework::OpProtoAndCheckerMaker {
  public:
   void Make() override {
     AddInput("Input",
@@ -59,21 +59,20 @@ class ModulatedDeformableConvOpMaker : public framework::OpProtoAndCheckerMaker 
         "(int default:1), the groups number of the convolution operator. "
         "According to grouped convolution in Alex Krizhevsky's Deep CNN paper: "
         "when group=2, the first half of the filters is only connected to the "
-        "first half of the input channels, while the second half of the filters "
+        "first half of the input channels, while the second half of the "
+        "filters "
         "is only connected to the second half of the input channels.")
         .SetDefault(1);
-    AddAttr<int>(
-        "deformable_groups",
-        "(int default:1), the number of the deformable groups.")
+    AddAttr<int>("deformable_groups",
+                 "(int default:1), the number of the deformable groups.")
         .SetDefault(1);
     AddAttr<std::vector<int>>("dilations",
                               "(vector<int> default:{1, 1}), the "
                               "dilations(h_dilation, w_dilation) of "
                               "convolution operator.")
         .SetDefault({1, 1});
-    AddAttr<int>(
-        "im2col_step",
-        "im2col maximum number of image per computation")
+    AddAttr<int>("im2col_step",
+                 "im2col maximum number of image per computation")
         .SetDefault(64);
     AddComment(R"DOC(
 **Modulated Deformable Convolution Operator**
@@ -110,24 +109,23 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
 
     std::vector<int> strides = ctx->Attrs().Get<std::vector<int>>("strides");
     std::vector<int> paddings = ctx->Attrs().Get<std::vector<int>>("paddings");
-    std::vector<int> dilations = ctx->Attrs().Get<std::vector<int>>("dilations");
+    std::vector<int> dilations =
+        ctx->Attrs().Get<std::vector<int>>("dilations");
     int groups = ctx->Attrs().Get<int>("groups");
     int deformable_groups = ctx->Attrs().Get<int>("deformable_groups");
     int im2col_step = ctx->Attrs().Get<int>("im2col_step");
 
-
     PADDLE_ENFORCE(in_dims.size() == 4,
-                   "Conv intput should be 4-D tensor, get %u",
-                   in_dims.size());
+                   "Conv intput should be 4-D tensor, get %u", in_dims.size());
     PADDLE_ENFORCE_EQ(
         in_dims.size(), filter_dims.size(),
         "Conv input dimension and filter dimension should be the same.");
     PADDLE_ENFORCE_EQ(
         in_dims.size() - strides.size(), 2U,
         "Conv input dimension and strides dimension should be consistent.");
-    PADDLE_ENFORCE_EQ(
-        paddings.size(), strides.size(),
-        "Conv paddings dimension and Conv strides dimension should be the same.");
+    PADDLE_ENFORCE_EQ(paddings.size(), strides.size(),
+                      "Conv paddings dimension and Conv strides dimension "
+                      "should be the same.");
 
     PADDLE_ENFORCE_EQ(in_dims[1], filter_dims[1] * groups,
                       "The number of input channels should be equal to filter "
@@ -135,67 +133,53 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
     PADDLE_ENFORCE_EQ(
         filter_dims[0] % groups, 0,
         "The number of output channels should be divided by groups.");
-    PADDLE_ENFORCE_EQ(
-        filter_dims[0] % deformable_groups, 0,
-        "The number of output channels should be "
-        "divided by deformable groups.");
+    PADDLE_ENFORCE_EQ(filter_dims[0] % deformable_groups, 0,
+                      "The number of output channels should be "
+                      "divided by deformable groups.");
 
-    if(in_dims[0] > im2col_step) {
-        PADDLE_ENFORCE_EQ(in_dims[0] % im2col_step, 0U,
-            "Input batchsize must be smaller than or divide im2col_step");
+    if (in_dims[0] > im2col_step) {
+      PADDLE_ENFORCE_EQ(
+          in_dims[0] % im2col_step, 0U,
+          "Input batchsize must be smaller than or divide im2col_step");
     }
 
     for (size_t i = 0; i < strides.size(); ++i) {
-        PADDLE_ENFORCE_GT(strides[i], 0U,
-        "incorrect stride size");
+      PADDLE_ENFORCE_GT(strides[i], 0U, "incorrect stride size");
     }
     for (size_t i = 0; i < paddings.size(); ++i) {
-        PADDLE_ENFORCE_GT(paddings[i], 0U,
-        "incorrect padding size");
+      PADDLE_ENFORCE_GT(paddings[i], 0U, "incorrect padding size");
     }
     for (size_t i = 0; i < dilations.size(); ++i) {
-        PADDLE_ENFORCE_GT(dilations[i], 0U,
-        "incorrect dilation size");
+      PADDLE_ENFORCE_GT(dilations[i], 0U, "incorrect dilation size");
     }
 
-    std::vector<int64_t>output_shape({in_dims[0], filter_dims[0]});
+    std::vector<int64_t> output_shape({in_dims[0], filter_dims[0]});
     for (size_t i = 0; i < strides.size(); ++i) {
-        output_shape.push_back(ConvOutputSize(in_dims[i + 2],
-                                              filter_dims[i + 2],
-                                              dilations[i],
-                                              paddings[i],
-                                              strides[i]));
+      output_shape.push_back(ConvOutputSize(in_dims[i + 2], filter_dims[i + 2],
+                                            dilations[i], paddings[i],
+                                            strides[i]));
     }
-    PADDLE_ENFORCE_EQ(
-        output_shape[1] % deformable_groups, 0U,
-        "output num_filter must divide deformable group size.");
-    PADDLE_ENFORCE_EQ(
-        output_shape[2], offset_dims[2],
-        "output height must equal to offset map height.");
-    PADDLE_ENFORCE_EQ(
-        output_shape[3], offset_dims[3],
-        "output width must equal to offset map width.");
-    PADDLE_ENFORCE_EQ(
-        offset_dims[1] % (filter_dims[2] * filter_dims[3]), 0U,
-        "offset filter must divide deformable group size.");
-    PADDLE_ENFORCE_EQ(
-        offset_dims[1] / (2* filter_dims[2] * filter_dims[3]), 0U,
-        "offset filter must divide deformable group size.");
-    PADDLE_ENFORCE_EQ(
-        output_shape[2], mask_dims[2],
-        "output height must equal to mask map height.");
-    PADDLE_ENFORCE_EQ(
-        output_shape[3], mask_dims[3],
-        "output width must equal to mask map width.");
-    PADDLE_ENFORCE_EQ(
-        mask_dims[1] % (filter_dims[2] * filter_dims[3]), 0U,
-        "mask filter must divide deformable group size.");
-    PADDLE_ENFORCE_EQ(
-        mask_dims[1] / (filter_dims[2] * filter_dims[3]), 0U,
-        "mask filter must divide deformable group size.");
+    PADDLE_ENFORCE_EQ(output_shape[1] % deformable_groups, 0U,
+                      "output num_filter must divide deformable group size.");
+    PADDLE_ENFORCE_EQ(output_shape[2], offset_dims[2],
+                      "output height must equal to offset map height.");
+    PADDLE_ENFORCE_EQ(output_shape[3], offset_dims[3],
+                      "output width must equal to offset map width.");
+    PADDLE_ENFORCE_EQ(offset_dims[1] % (filter_dims[2] * filter_dims[3]), 0U,
+                      "offset filter must divide deformable group size.");
+    PADDLE_ENFORCE_EQ(offset_dims[1] / (2 * filter_dims[2] * filter_dims[3]),
+                      0U, "offset filter must divide deformable group size.");
+    PADDLE_ENFORCE_EQ(output_shape[2], mask_dims[2],
+                      "output height must equal to mask map height.");
+    PADDLE_ENFORCE_EQ(output_shape[3], mask_dims[3],
+                      "output width must equal to mask map width.");
+    PADDLE_ENFORCE_EQ(mask_dims[1] % (filter_dims[2] * filter_dims[3]), 0U,
+                      "mask filter must divide deformable group size.");
+    PADDLE_ENFORCE_EQ(mask_dims[1] / (filter_dims[2] * filter_dims[3]), 0U,
+                      "mask filter must divide deformable group size.");
 
     ctx->SetOutputDim("Output", framework::make_ddim(output_shape));
-    //TODO: Add share LOD
+    // TODO(yifan): Add share LOD
   }
 
  protected:
@@ -206,7 +190,8 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
   }
 };
 
-class ModulatedDeformableConvGradOpDescMaker : public framework::SingleGradOpDescMaker {
+class ModulatedDeformableConvGradOpDescMaker
+    : public framework::SingleGradOpDescMaker {
  public:
   using framework::SingleGradOpDescMaker::SingleGradOpDescMaker;
 
@@ -270,8 +255,7 @@ class ModulatedDeformableConvGradOp : public framework::OperatorWithKernel {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
-REGISTER_OPERATOR(modulated_deformable_conv,
-                  ops::ModulatedDeformableConvOp,
+REGISTER_OPERATOR(modulated_deformable_conv, ops::ModulatedDeformableConvOp,
                   ops::ModulatedDeformableConvOpMaker,
                   ops::ModulatedDeformableConvGradOpDescMaker);
 

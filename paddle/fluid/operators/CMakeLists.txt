@@ -73,6 +73,7 @@ else()
     op_library(warpctc_op DEPS dynload_warpctc sequence_padding sequence_scale)
 endif()
 
+
 set(COMMON_OP_DEPS ${OP_HEADER_DEPS})
 
 if (WITH_GPU AND NOT WIN32)

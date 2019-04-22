@@ -35,8 +35,8 @@ def dmconv(input, offset, mask, filter, bias, group, deforamble_group,
     out_w = 1 + (in_w + 2 * pad[1] - (dilation[1] * (f_w - 1) + 1)) // stride[1]
     out = np.zeros((in_n, out_c, out_h, out_w))
 
-    d_bolck_h = (dilation[0] * (f_h - 1) + 1)
-    d_bolck_w = (dilation[1] * (f_w - 1) + 1)
+    d_bolck_h = dilation[0] * (f_h - 1) + 1
+    d_bolck_w = dilation[1] * (f_w - 1) + 1
 
     input_pad = np.pad(input, ((0, ), (0, ), (pad[0], ), (pad[1], )),
                        mode='constant',
