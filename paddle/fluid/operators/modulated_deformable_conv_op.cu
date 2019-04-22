@@ -13,6 +13,9 @@
 // limitations under the License.
 
 #include "paddle/fluid/operators/modulated_deformable_conv_op.h"
+#include "paddle/fluid/operators/math/blas.h"
+#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/fluid/platform/cuda_primitives.h"
 
 namespace paddle {
 namespace operators {

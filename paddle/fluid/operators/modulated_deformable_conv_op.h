@@ -18,8 +18,5 @@
 #include "paddle/fluid/operators/conv_op.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/operators/math/blas.h"
-#include "paddle/fluid/operators/math/im2col.h"
 #include "paddle/fluid/operators/math/math_function.h"
 #include "paddle/fluid/platform/cuda_primitives.h"
-#include "paddle/fluid/platform/gpu_info.h"
-
