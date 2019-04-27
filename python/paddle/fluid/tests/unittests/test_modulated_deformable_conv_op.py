@@ -154,8 +154,6 @@ class TestModulatedDeformableConvOp(OpTest):
         self.check_output_with_place(place, atol=1e-5)
 
     def test_check_grad(self):
-        if self.dtype == np.float16:
-            return
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
             place, {'Input', 'Offset', 'Mask', 'Filter'},
