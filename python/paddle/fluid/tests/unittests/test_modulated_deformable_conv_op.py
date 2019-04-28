@@ -146,7 +146,7 @@ class TestModulatedDeformableConvOp(OpTest):
         self.check_grad_with_place(
             place, {'Input', 'Offset', 'Mask', 'Filter'},
             'Output',
-            max_relative_error=0.02)
+            max_relative_error=0.05)
      
     def test_check_grad_no_filter(self):
         place = core.CUDAPlace(0)
@@ -185,12 +185,12 @@ class TestModulatedDeformableConvOp(OpTest):
         self.pad = [1, 1]
         self.stride = [1, 1]
         self.dilations = [1, 1]
-        self.input_size = [2, 3, 4, 4]  # NCHW
+        self.input_size = [2, 3, 5, 5]  # NCHW
         assert np.mod(self.input_size[1], self.groups) == 0
         f_c = self.input_size[1] // self.groups
         self.filter_size = [6, f_c, 3, 3]
-        self.offset_size = [2, 18, 4, 4]
-        self.mask_size = [2, 9, 4, 4]
+        self.offset_size = [2, 18, 5, 5]
+        self.mask_size = [2, 9, 5, 5]
         self.im2col_step = 1
         self.deformable_groups = 1
 
