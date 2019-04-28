@@ -51,7 +51,7 @@ def dmc_bilinear(data_im, height, width, h, w):
     return val
 
 
-def dconv_im2col_gemm(input, offset, mask, filter):
+def dconv_im2col_gemm(input, offset, mask, filter, conv2d_param):
     in_n, in_c, in_h, in_w = input.shape
     out_c, f_c, f_h, f_w = filter.shape
 
@@ -62,26 +62,19 @@ def dconv_im2col_gemm(input, offset, mask, filter):
     out_h = in_h
     out_w = in_w
     out = np.zeros((in_n, out_c, out_h * out_w))
-    #print("input: ", input)
-    #print("offset: ", offset)
-    #print("mask: ", mask)
-    #print("filter: ", filter)
     input_pad = np.pad(input, ((0, ), (0, ), ((f_h - 1) // 2, ), (
         (f_w - 1) // 2, )),
                        mode='constant',
                        constant_values=0)
     col_buffer = np.zeros((in_n, in_c * f_h * f_w, in_h * in_w))
-
     in_n, in_c, in_pad_h, in_pad_w = input_pad.shape
 
     for n in range(in_n):
-    # im2col
         for c in range(in_c):
             for h in range(in_h):
                 for w in range(in_w):
                     for kh in range(f_h):
                         for kw in range(f_w):
-
                             offset_h_table = \
                                     offset[n, ::2, h, w].reshape(f_h, f_w)
                             offset_w_table = \
@@ -93,19 +86,14 @@ def dconv_im2col_gemm(input, offset, mask, filter):
                             val = 0
                             im_h = h + kh + offset_h - (f_h - 1) // 2
                             im_w = w + kw + offset_w - (f_w - 1) // 2
-                            in_status = 0
                             if im_h > -1 and im_w > -1 and \
                                 im_h < in_h and im_w < in_h:
-                                in_status = 1
                                 val = dmc_bilinear(input[n, c],
                                     in_h, in_w, im_h, im_w)
                             val_out = val * mask_table[kh, kw]
                             col_buffer[n, c * f_h * f_w + kh *f_w + kw, h * in_w + w] = val_out
-                            #print("coord offset:", h-1, kh, w-1, kw, im_h, im_w, offset_h, offset_w, mask_table[kh, kw])
-    #print("col buffer", col_buffer)
     weight = filter.reshape(out_c, f_c * f_h * f_w)
     for n in range(in_n):
-        #print("matmul:", weight.shape, col_buffer[n].shape)
         out[n] = np.matmul(weight, col_buffer[n])
     out = out.reshape(in_n, out_c, out_h, out_w)
     return out
@@ -126,11 +114,11 @@ class TestModulatedDeformableConvOp(OpTest):
         }
 
         input = np.random.random(self.input_size).astype(self.dtype)
-        offset = np.random.random(self.offset_size).astype(self.dtype)
-        mask = np.random.random(self.mask_size).astype(self.dtype)
+        offset = 10 * np.random.random(self.offset_size).astype(self.dtype)
+        mask = 10 * np.random.random(self.mask_size).astype(self.dtype)
         filter = np.random.random(self.filter_size).astype(self.dtype)
 
-        output = dconv_im2col_gemm(input, offset, mask, filter)
+        output = dconv_im2col_gemm(input, offset, mask, filter, conv2d_param)
         output = output.astype(self.dtype)
 
         self.inputs = {
@@ -159,7 +147,40 @@ class TestModulatedDeformableConvOp(OpTest):
             place, {'Input', 'Offset', 'Mask', 'Filter'},
             'Output',
             max_relative_error=0.02)
+     
+    def test_check_grad_no_filter(self):
+        place = core.CUDAPlace(0)
+        self.check_grad_with_place(
+            place, ['Input', 'Offset', 'Mask'],
+            'Output',
+            max_relative_error=0.02,
+            no_grad_set=set(['Filter']))
+    
+    '''
+    def test_check_grad_no_input(self):
+        place = core.CUDAPlace(0)
+        self.check_grad_with_place(
+            place, ['Filter', 'Offset', 'Mask'],
+            'Output',
+            max_relative_error=0.02,
+            no_grad_set=set(['Input']))
 
+    def test_check_grad_no_offset(self):
+        place = core.CUDAPlace(0)
+        self.check_grad_with_place(
+            place, ['Input', 'Filter', 'Mask'],
+            'Output',
+            max_relative_error=0.02,
+            no_grad_set=set(['Offset']))
+
+    def test_check_grad_no_mask(self):
+        place = core.CUDAPlace(0)
+        self.check_grad_with_place(
+            place, ['Input', 'Offset', 'Filter'],
+            'Output',
+            max_relative_error=0.02,
+            no_grad_set=set(['Mask']))
+    '''
     def init_test_case(self):
         self.pad = [1, 1]
         self.stride = [1, 1]
@@ -170,15 +191,14 @@ class TestModulatedDeformableConvOp(OpTest):
         self.filter_size = [6, f_c, 3, 3]
         self.offset_size = [2, 18, 4, 4]
         self.mask_size = [2, 9, 4, 4]
-        self.deformable_groups = 1
         self.im2col_step = 1
+        self.deformable_groups = 1
 
     def init_dilation(self):
         self.dilations = [1, 1]
 
     def init_group(self):
         self.groups = 1
-
 
 #class TestWithPad(TestConv2dOp):
 #    def init_test_case(self):

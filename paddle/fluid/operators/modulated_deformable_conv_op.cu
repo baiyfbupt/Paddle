@@ -32,18 +32,6 @@ static inline int NumBlocks(const int N) {
 }
 
 template <typename T>
-__global__ void filter_grad_addup_gpu_kernel(const int nthreads, const int n,
-		                             const int height, const int width,
-					     const T* dweight_3d,
-					     T* filter_grad) {
-  int index = blockIdx.x * blockDim.x + threadIdx.x;
-  int offset = blockDim.x * gridDim.x;
-  for (size_t i = index; i < nthreads; i += offset) {
-    filter_grad[i] = filter_grad[i] + dweight_3d[i];
-  } 
-}
-
-template <typename T>
 __device__ T dmcn_get_gradient_weight(T argmax_h, T argmax_w, const int h,
                                       const int w, const int height,
                                       const int width) {
@@ -86,7 +74,6 @@ __global__ void modulated_deformable_col2im_gpu_kernel(
         (thread / width_col / height_col / batch_size / kernel_w) % kernel_h;
     const int c =
         thread / width_col / height_col / batch_size / kernel_w / kernel_h;
-    // compute the start and end of the output
 
     const int deformable_group_index = c / channel_per_deformable_group;
 
@@ -202,7 +189,6 @@ __device__ T dmcn_get_coordinate_weight(T argmax_h, T argmax_w,
       weight += (argmax_h - argmax_h_low) *
                 im_data[argmax_h_high * data_width + argmax_w_high];
   }
-
   return weight;
 }
 
@@ -363,14 +349,12 @@ __global__ void modulated_deformable_im2col_gpu_kernel(
   int index = blockIdx.x * blockDim.x + threadIdx.x;
   int offset = blockDim.x * gridDim.x;
   for (size_t i = index; i < nthreads; i += offset) {
-    // index of output matrix
     const int w_col = i % width_col;
     const int h_col = (i / width_col) % height_col;
     const int b_col = (i / width_col) / height_col % batch_size;
     const int c_im = (i / width_col / height_col) / batch_size;
     const int c_col = c_im * kernel_h * kernel_w;
 
-    // conpute deformable group index
     const int deformable_group_index = c_im / channel_per_deformable_group;
 
     const int h_in = h_col * stride_h - pad_h;
@@ -444,6 +428,18 @@ inline void modulated_deformable_im2col(
       data_col);
 }
 
+template <typename T>
+__global__ void filter_grad_addup_gpu_kernel(const int nthreads, const int n,
+		                             const int height, const int width,
+					     const T* dweight_3d,
+					     T* filter_grad) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int offset = blockDim.x * gridDim.x;
+  for (size_t i = index; i < nthreads; i += offset) {
+    filter_grad[i] = filter_grad[i] + dweight_3d[i];
+  } 
+}
+
 template <typename DeviceContext, typename T>
 class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
  public:
@@ -466,19 +462,15 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
 
     const int batch_size = static_cast<int>(input->dims()[0]);
 
-    // filter_shape_vec: {c_o, c_i, k_h, k_w}
     std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
-    // output_shape_vec: {n, o_c, o_h, o_w}
     std::vector<int64_t> output_shape_vec(framework::vectorize(output->dims()));
 
-    // filter_shape_vec.size(): 4
     // col_shape_vec: {c_i * k_h * k_w, im2col_step, o_h, o_w}
-    size_t data_dim = filter_shape_vec.size() - 2;
-    std::vector<int64_t> col_buffer_shape_vec(2 + data_dim);
+    std::vector<int64_t> col_buffer_shape_vec(filter_shape_vec.size());
     col_buffer_shape_vec[0] =
         input->dims()[1] * filter.dims()[2] * filter.dims()[3];
     col_buffer_shape_vec[1] = im2col_step;
-    for (size_t j = 0; j < data_dim; ++j) {
+    for (size_t j = 0; j < filter_shape_vec.size()-2; ++j) {
       col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
     }
     framework::DDim col_shape(framework::make_ddim(col_buffer_shape_vec));
@@ -498,14 +490,11 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
         input->dims()[1] * filter_shape_vec[2] * filter_shape_vec[3] / groups;
 
     Tensor weight_3d;
-    weight_3d.ShareDataWith(filter);
-    weight_3d.Resize(framework::make_ddim({groups, M, K}));
+    weight_3d.ShareDataWith(filter).Resize(framework::make_ddim({groups, M, K}));
     Tensor col_buffer_3d;
-    col_buffer_3d.ShareDataWith(col_buffer);
-    col_buffer_3d.Resize(framework::make_ddim({groups, K, N}));
+    col_buffer_3d.ShareDataWith(col_buffer).Resize(framework::make_ddim({groups, K, N}));
     Tensor output_4d;
-    output_4d.ShareDataWith(output_buffer);
-    output_4d.Resize(
+    output_4d.ShareDataWith(output_buffer).Resize(
         framework::make_ddim({batch_size / im2col_step, groups, M, N}));
     output_4d.mutable_data<T>(ctx.GetPlace());
     framework::DDim input_shape =
@@ -547,25 +536,9 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
 
         blas.MatMul(weight_3d_slice, false, col_buffer_3d_slice, false, T(1.0),
                     &output_3d_slice, T(0.0));
-
       }
     }
-    Tensor trans_output_4d;
-    trans_output_4d.ShareDataWith(output_buffer);
-    framework::DDim trans_output_4d_shape = {
-        batch_size / im2col_step, filter_shape_vec[0], im2col_step,
-        output_shape_vec[2] * output_shape_vec[3]};
-    trans_output_4d.Resize(trans_output_4d_shape);
-
-    Tensor origin_output_4d;
-    origin_output_4d.ShareDataWith(*output);
-    framework::DDim origin_output_4d_shape = {
-        batch_size / im2col_step, im2col_step, filter_shape_vec[0],
-        output_shape_vec[2] * output_shape_vec[3]};
-    origin_output_4d = trans_output_4d.Resize(origin_output_4d_shape);
-    output->ShareDataWith(origin_output_4d.Resize(framework::make_ddim(output_shape_vec)));
-
-    // TODO(yifan): check bias
+    output->ShareDataWith(output_buffer).Resize(framework::make_ddim(output_shape_vec));
   }
 };
 
@@ -573,8 +546,6 @@ template <typename DeviceContext, typename T>
 class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-    const auto gplace = boost::get<platform::CUDAPlace>(ctx.GetPlace());
-    const auto cplace = platform::CPUPlace();
     const Tensor* output_grad =
         ctx.Input<Tensor>(framework::GradVarName("Output"));
     Tensor* input_grad = ctx.Output<Tensor>(framework::GradVarName("Input"));
@@ -606,12 +577,11 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     std::vector<int64_t> output_shape_vec(
         framework::vectorize(output_grad->dims()));
 
-    size_t data_dim = filter_shape_vec.size() - 2;
-    std::vector<int64_t> col_buffer_shape_vec(data_dim + 2);
+    std::vector<int64_t> col_buffer_shape_vec(filter_shape_vec.size());
     col_buffer_shape_vec[0] =
         input->dims()[1] * filter.dims()[2] * filter.dims()[3];
     col_buffer_shape_vec[1] = im2col_step;
-    for (size_t j = 0; j < data_dim; ++j) {
+    for (size_t j = 0; j < filter_shape_vec.size()-2; ++j) {
       col_buffer_shape_vec[j + 2] = output_shape_vec[j + 2];
     }
     framework::DDim col_shape(framework::make_ddim(col_buffer_shape_vec));
@@ -625,21 +595,12 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     output_buffer =
         ctx.AllocateTmpTensor<T, DeviceContext>(output_shape, dev_ctx);
 
-    Tensor trans_output_4d;
-    framework::DDim trans_output_4d_shape = {
-        batch_size / im2col_step, output_shape_vec[1], im2col_step,
-        output_shape_vec[2] * output_shape_vec[3]};
-    trans_output_4d.ShareDataWith(output_buffer);
-    trans_output_4d.Resize(trans_output_4d_shape);
+    output_buffer.ShareDataWith(*output_grad);
 
-    Tensor origin_output_4d;
-    framework::DDim origin_output_4d_shape = {
-        batch_size / im2col_step, im2col_step, output_shape_vec[1],
-        output_shape_vec[2] * output_shape_vec[3]};
-    origin_output_4d.ShareDataWith(*output_grad);
-    trans_output_4d = origin_output_4d.Resize(trans_output_4d_shape);
-
-    output_buffer.ShareDataWith(trans_output_4d);
+    input_grad->mutable_data<T>(ctx.GetPlace());
+    filter_grad->mutable_data<T>(ctx.GetPlace());
+    offset_grad->mutable_data<T>(ctx.GetPlace());
+    mask_grad->mutable_data<T>(ctx.GetPlace());
 
     int64_t M = input_shape_vec[0] / groups * filter_shape_vec[2] * filter_shape_vec[3];
     int64_t N = im2col_step * output_shape_vec[2] * output_shape_vec[3];
@@ -650,47 +611,27 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
                                          N};
     framework::DDim col_buffer_3d_shape = {groups, M, N};
     framework::DDim filter_grad_shape = {groups, K, M};
-    framework::DDim data_grad_shape = {input_grad->numel()};
     
-    input_grad->mutable_data<T>(ctx.GetPlace());
-    filter_grad->mutable_data<T>(ctx.GetPlace());
-    std::cout << "filter_grad_shape: " << filter_grad->dims().size() << std::endl;
-    std::cout << filter_grad->dims()[0]<<" " << filter_grad->dims()[1] <<" "<< filter_grad->dims()[2]<<" "<<filter_grad->dims()[3]<<" " << std::endl;
-    offset_grad->mutable_data<T>(ctx.GetPlace());
-    mask_grad->mutable_data<T>(ctx.GetPlace());
-
-    Tensor weight_3d;
-    weight_3d.ShareDataWith(filter);
-    weight_3d.Resize(weight_3d_shape);
-    Tensor out_grad_4d;
-    out_grad_4d.ShareDataWith(output_buffer);
-    out_grad_4d.Resize(out_grad_4d_shape); 
-    Tensor col_buffer_3d;
-    col_buffer_3d.mutable_data<T>(ctx.GetPlace());
-    col_buffer_3d.ShareDataWith(col_buffer);
-    col_buffer_3d.Resize(col_buffer_3d_shape);     
-    // Tensor dweight_3d;
-    // dweight_3d.ShareDataWith(*filter_grad);
-    // dweight_3d.Resize(dweight_3d_shape);
     filter_grad->Resize(filter_grad_shape);
-    Tensor data_grad;
-    data_grad.ShareDataWith(*input_grad);
-    data_grad.Resize(data_grad_shape);
+    Tensor weight_3d;
+    weight_3d.ShareDataWith(filter).Resize(weight_3d_shape);
+    Tensor out_grad_4d;
+    out_grad_4d.ShareDataWith(output_buffer).Resize(out_grad_4d_shape); 
+    Tensor col_buffer_3d;
+    col_buffer_3d.ShareDataWith(col_buffer).Resize(col_buffer_3d_shape);     
 
     math::SetConstant<DeviceContext, T> set_zero;
     auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
-    set_zero(dev_ctx, &data_grad, static_cast<T>(0));
-    input_grad->ShareDataWith(data_grad);
+    set_zero(dev_ctx, input_grad, static_cast<T>(0));
 
     col_buffer.mutable_data<T>(ctx.GetPlace());
-    // dweight_3d.mutable_data<T>(ctx.GetPlace());
+    col_buffer_3d.mutable_data<T>(ctx.GetPlace());
+    out_grad_4d.mutable_data<T>(ctx.GetPlace());
     
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
     int input_mask_dim = mask.numel() / mask.dims()[0];
     
-    out_grad_4d.mutable_data<T>(ctx.GetPlace());
-
     for (int i = 0; i < batch_size / im2col_step; ++i) {
       Tensor out_grad_3d =
           out_grad_4d.Slice(i, i + 1).Resize(framework::slice_ddim(
@@ -709,7 +650,6 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
         blas.MatMul(weight_3d_slice, true, out_grad_3d_slice, false, T(1.0),
                     &col_buffer_3d_slice, T(0.0));
       }
-      col_buffer.ShareDataWith(col_buffer_3d);
       col_buffer.Resize(col_shape);
 
       T* col_buffer_ptr = col_buffer.data<T>();
@@ -744,12 +684,10 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           col_buffer_shape_vec, filter_shape_vec, paddings, strides, dilations,
           deformable_groups, col_buffer_ptr);
       
-      col_buffer_3d.ShareDataWith(col_buffer);
       col_buffer_3d.Resize(col_buffer_3d_shape);
 
       Tensor dweight_3d;
       dweight_3d = ctx.AllocateTmpTensor<T, DeviceContext>(filter_grad_shape, dev_ctx);
-
       for (int g = 0; g < groups; ++g) {
         Tensor out_grad_3d_slice =
             out_grad_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
@@ -767,7 +705,6 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
       filter_grad_addup_gpu_kernel<T><<<NumBlocks(dweight_3d.numel()), kNumCUDAThreads, 0, ctx.cuda_device_context().stream()>>>(dweight_3d.numel(), groups, K, M, dweight_3d.data<T>(), filter_grad->data<T>());
     }
     filter_grad->Resize(filter.dims());
-    // bias
   }
 };
 

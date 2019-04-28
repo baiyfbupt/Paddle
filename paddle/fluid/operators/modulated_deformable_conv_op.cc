@@ -35,11 +35,6 @@ class ModulatedDeformableConvOpMaker
              "(Tensor) The Input Filter "
              "The shape of the wight is "
              "[num_filters, channel_input, kernel_h, kernel_w.");
-    AddInput("Bias",
-             "(Tensor) The Input Bias "
-             "The shape of the bias is "
-             "[num_filters, ].")
-        .AsDispensable();
     AddOutput("Output",
               "(Tensor) The output. "
               "The shape of the output tensor is "
@@ -204,14 +199,12 @@ class ModulatedDeformableConvGradOpDescMaker
     op->SetType("modulated_deformable_conv_grad");
     op->SetInput("Input", Input("Input"));
     op->SetInput("Filter", Input("Filter"));
-    op->SetInput("Bias", Input("Bias"));
     op->SetInput("Offset", Input("Offset"));
     op->SetInput("Mask", Input("Mask"));
     op->SetInput(framework::GradVarName("Output"), OutputGrad("Output"));
 
     op->SetOutput(framework::GradVarName("Input"), InputGrad("Input"));
     op->SetOutput(framework::GradVarName("Filter"), InputGrad("Filter"));
-    op->SetOutput(framework::GradVarName("Bias"), InputGrad("Bias"));
     op->SetOutput(framework::GradVarName("Offset"), InputGrad("Offset"));
     op->SetOutput(framework::GradVarName("Mask"), InputGrad("Mask"));
 
