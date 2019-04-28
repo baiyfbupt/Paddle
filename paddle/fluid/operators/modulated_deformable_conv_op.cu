@@ -14,7 +14,6 @@
 
 #include <algorithm>
 #include <vector>
-#include <iostream>
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/operators/math/blas.h"
 #include "paddle/fluid/operators/math/math_function.h"
@@ -33,12 +32,23 @@ static inline int NumBlocks(const int N) {
 }
 
 template <typename T>
+__global__ void filter_grad_addup_gpu_kernel(const int nthreads, const int n,
+		                             const int height, const int width,
+					     const T* dweight_3d,
+					     T* filter_grad) {
+  int index = blockIdx.x * blockDim.x + threadIdx.x;
+  int offset = blockDim.x * gridDim.x;
+  for (size_t i = index; i < nthreads; i += offset) {
+    filter_grad[i] = filter_grad[i] + dweight_3d[i];
+  } 
+}
+
+template <typename T>
 __device__ T dmcn_get_gradient_weight(T argmax_h, T argmax_w, const int h,
                                       const int w, const int height,
                                       const int width) {
   if (argmax_h <= -1 || argmax_h >= height || argmax_w <= -1 ||
       argmax_w >= width) {
-    // empty
     return 0;
   }
 
@@ -119,7 +129,7 @@ __global__ void modulated_deformable_col2im_gpu_kernel(
               dmcn_get_gradient_weight(cur_inv_h_data, cur_inv_w_data,
                                        cur_h + dy, cur_w + dx, height, width);
 
-          atomicAdd(&grad_im[cur_bottom_grad_pos], weight * cur_top_grad);
+          atomicAdd(grad_im + cur_bottom_grad_pos, weight * cur_top_grad);
         }
       }
     }
@@ -128,7 +138,6 @@ __global__ void modulated_deformable_col2im_gpu_kernel(
 
 template <typename T>
 inline void modulated_deformable_col2im(
-    // const paddle::platform::CUDADeviceContext ctx,
     const platform::DeviceContext& ctx, const T* data_col, const T* data_offset,
     const T* data_mask, const std::vector<int64_t> im_shape,
     const std::vector<int64_t> col_shape,
@@ -156,7 +165,6 @@ __device__ T dmcn_get_coordinate_weight(T argmax_h, T argmax_w,
                                         const int bp_dir) {
   if (argmax_h <= -1 || argmax_h >= height || argmax_w <= -1 ||
       argmax_w >= width) {
-    // empty
     return 0;
   }
 
@@ -340,9 +348,6 @@ __device__ T dmcn_im2col_bilinear(const T* bottom_data, const int data_width,
   T w1 = hh * hw, w2 = hh * lw, w3 = lh * hw, w4 = lh * lw;
 
   T val = (w1 * v1 + w2 * v2 + w3 * v3 + w4 * v4);
-  // if (val == 0) {
-  //    printf("bilinear 0:%f, %f, %f, %f, %f, %f, %f, %f", v1, v2, v3, v4, w1, w2, w3, w3);
-  // }
   return val;
 }
 
@@ -408,25 +413,14 @@ __global__ void modulated_deformable_im2col_gpu_kernel(
                                      w_im);
         }
         *data_col_ptr = val * mask;
-        // printf("gpu coord offset:%d, %d, %d, %d, %f, %f, %f, %f, %f \n ", h_in, i, w_in, j, h_im, w_im, offset_h, offset_w, mask);
-	//if (*data_col_ptr == 0) {
-	//    printf("index: %d, val: %f, mask: %f, h_im: %f, w_im: %f, height: %d, width: %d, b_staus: %d\n ", index, val, mask, h_im, w_im, height, width, bilinear_status);
-	//}
          data_col_ptr += batch_size * height_col * width_col;
       }
     }
   }
 }
 
-// im_shape {c_i, i_h, i_w}
-// col_shape {c_in * k_h * k_w, im2col_step, o_h, o_w}
-// filter_shape {c_o, c_i, k_h, k_w}
-// paddings {p_h, p_w}
-// strides {s_h, s_w}
-// dilations {d_h, d_w}
 template <typename T>
 inline void modulated_deformable_im2col(
-    // const paddle::platform::CUDADeviceContext ctx,
     const platform::DeviceContext& ctx, const T* data_im, const T* data_offset,
     const T* data_mask, const std::vector<int64_t> im_shape,
     const std::vector<int64_t> col_shape,
@@ -434,9 +428,7 @@ inline void modulated_deformable_im2col(
     const std::vector<int> strides, const std::vector<int> dilations,
     const int deformable_groups, T* data_col) {
   
-  // {c_i / deformable_group}
   int channel_per_deformable_group = im_shape[0] / deformable_groups;
-  // {c_i * o_h * o_w}
   int num_kernels = im_shape[0] * col_shape[1] * col_shape[2] * col_shape[3];
 
   int blocks = NumBlocks(num_kernels);
@@ -463,49 +455,7 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     Tensor* output = ctx.Output<Tensor>("Output");
     output->mutable_data<T>(ctx.GetPlace());
     
-    const auto gplace = boost::get<platform::CUDAPlace>(ctx.GetPlace());
-    const auto cplace = platform::CPUPlace();
     auto& dev_ctx = ctx.cuda_device_context();
-
-    int i_size = input->dims()[0] * input->dims()[1] * input->dims()[2] * input->dims()[3];
-    T in[i_size];
-    memory::Copy(cplace, in, gplace, input->data<T>(), i_size * sizeof(T), dev_ctx.stream());
-    //std::cout << "====input===" << std::endl;
-    //std::cout << input->dims()[0] << " " << input->dims()[1] << " "<< input->dims()[2]<<" " << input->dims()[3] << std::endl;
-    for (int i = 0; i < i_size; i++) {
-    //  std::cout << i << ": " << in[i] << "  ";
-    }
-    //std::cout << std::endl;
-
-    int o_size = offset.dims()[0] * offset.dims()[1] * offset.dims()[2] * offset.dims()[3];
-    T off[o_size];
-    memory::Copy(cplace, off, gplace, offset.data<T>(), o_size * sizeof(T), dev_ctx.stream());
-    //std::cout << "====offset===" << std::endl;
-    //std::cout << offset.dims()[0] << " " << offset.dims()[1] << " "<< offset.dims()[2]<<" " << offset.dims()[3] << std::endl;
-    for (int i = 0; i < o_size; i++) {
-    //  std::cout << i << ": " << off[i] << "  ";
-    }
-    //std::cout << std::endl;
-
-    int m_size = mask.dims()[0] * mask.dims()[1] * mask.dims()[2] * mask.dims()[3];
-    T m[m_size];
-    memory::Copy(cplace, m, gplace, mask.data<T>(), m_size * sizeof(T), dev_ctx.stream());
-    //std::cout << "====mask===" << std::endl;
-    //std::cout << mask.dims()[0] << " " << mask.dims()[1] << " "<< mask.dims()[2]<<" " << mask.dims()[3] << std::endl;
-    //for (int i = 0; i < m_size; i++) {
-    //  std::cout << i << ": " << m[i] << "  ";
-    //}
-    //std::cout << std::endl;
-
-    int f_size = filter.dims()[0] * filter.dims()[1] * filter.dims()[2] * filter.dims()[3];
-    T filt[f_size];
-    memory::Copy(cplace, filt, gplace, filter.data<T>(), f_size * sizeof(T), dev_ctx.stream());
-    //std::cout << "====filter===" << std::endl;
-    //std::cout << filter.dims()[0] << " " << filter.dims()[1] <<" "<< filter.dims()[2] << " "<< filter.dims()[3] << std::endl;
-    for (int i = 0; i < f_size; i++) {
-    //  std::cout << i << ": " <<filt[i] << "  ";
-    }
-    //std::cout << std::endl;
 
     const int groups = ctx.Attr<int>("groups");
     const int deformable_groups = ctx.Attr<int>("deformable_groups");
@@ -513,7 +463,6 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     const std::vector<int> strides = ctx.Attr<std::vector<int>>("strides");
     const std::vector<int> paddings = ctx.Attr<std::vector<int>>("paddings");
     const std::vector<int> dilations = ctx.Attr<std::vector<int>>("dilations");
-
 
     const int batch_size = static_cast<int>(input->dims()[0]);
 
@@ -526,7 +475,6 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     // col_shape_vec: {c_i * k_h * k_w, im2col_step, o_h, o_w}
     size_t data_dim = filter_shape_vec.size() - 2;
     std::vector<int64_t> col_buffer_shape_vec(2 + data_dim);
-    // c_i * k_w * k_h /
     col_buffer_shape_vec[0] =
         input->dims()[1] * filter.dims()[2] * filter.dims()[3];
     col_buffer_shape_vec[1] = im2col_step;
@@ -555,29 +503,11 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     Tensor col_buffer_3d;
     col_buffer_3d.ShareDataWith(col_buffer);
     col_buffer_3d.Resize(framework::make_ddim({groups, K, N}));
-
-    int b_size = col_buffer_shape_vec[0] * col_buffer_shape_vec[1] * col_buffer_shape_vec[2] * col_buffer_shape_vec[3];
-    T col_b[b_size];
-    memory::Copy(cplace, col_b, gplace, col_buffer.data<T>(), sizeof(T) * b_size, dev_ctx.stream());
-    //std::cout << "====col_buffer_before===" << std::endl;
-    for (int i = 0; i < b_size; i++) {
-    //  std::cout << i << ": " <<col_b[i] << "  ";
-    }
-    //std::cout << std::endl;
-    memory::Copy(cplace, col_b, gplace, col_buffer_3d.data<T>(), sizeof(T) * b_size, dev_ctx.stream());
-   // std::cout << "====col_buffer_3d_before===" << std::endl;
-    for (int i = 0; i < b_size; i++) {
-    //  std::cout << i << ": " <<col_b[i] << "  ";
-    }
-    //std::cout << std::endl;
     Tensor output_4d;
     output_4d.ShareDataWith(output_buffer);
     output_4d.Resize(
         framework::make_ddim({batch_size / im2col_step, groups, M, N}));
-    
     output_4d.mutable_data<T>(ctx.GetPlace());
-
-    // // input {c_i, i_h, i_w}
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
     std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
@@ -594,38 +524,17 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     col_buffer.mutable_data<T>(ctx.GetPlace());
     T* col_buffer_ptr = col_buffer.data<T>();
 
-    for (int i = 0; i < batch_size / im2col_step; i++) {
+    for (int i = 0; i < batch_size / im2col_step; ++i) {
       modulated_deformable_im2col(
           ctx.device_context(), input_ptr + i * im2col_step * input_dim,
           offset_ptr + i * im2col_step * input_offset_dim,
           mask_ptr + i * im2col_step * input_mask_dim, input_shape_vec,
           col_buffer_shape_vec, filter_shape_vec, paddings, strides, dilations,
           deformable_groups, col_buffer_ptr);
-      memory::Copy(cplace, col_b, gplace, col_buffer.data<T>(), sizeof(T) * b_size, dev_ctx.stream());
-      //std::cout << "====col_buffer_after===" << std::endl;
-      for (int i = 0; i < b_size; i++) {
-      //  std::cout << i << ": " <<col_b[i] << "  ";
-      }
-      //std::cout << std::endl;
-      memory::Copy(cplace, col_b, gplace, col_buffer_3d.data<T>(), sizeof(T) * b_size, dev_ctx.stream());
-      //std::cout << "====col_buffer_3d_after===" << std::endl;
-      for (int i = 0; i < b_size; i++) {
-      //  std::cout << i << ": " <<col_b[i] << "  ";
-      }
-      //std::cout << std::endl;
 
       Tensor output_3d = output_4d.Slice(i, i + 1).Resize(
           framework::slice_ddim(output_4d.dims(), 1, output_4d.dims().size()));
-      for (int g = 0; g < groups; g++) {
-        int w_size = weight_3d.dims()[0] * weight_3d.dims()[1] * weight_3d.dims()[2];
-	T tmp[w_size];
-       
-        memory::Copy(cplace, tmp, gplace, weight_3d.data<T>(), sizeof(T) * w_size, dev_ctx.stream());
-        //std::cout << "====weight_3d===" << std::endl;
-        for (int i = 0; i < w_size; i++) {
-        //  std::cout << i << ": " <<tmp[i] << "  ";
-        }
-        //std::cout << std::endl;
+      for (int g = 0; g < groups; ++g) {
         Tensor weight_3d_slice =
             weight_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
                 weight_3d.dims(), 1, weight_3d.dims().size()));
@@ -636,34 +545,9 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
             output_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
                 output_3d.dims(), 1, output_3d.dims().size()));
 
-	int w_slice_size = weight_3d.dims()[1] * weight_3d.dims()[2];
-	int c_slice_size = col_buffer_3d.dims()[1] * col_buffer_3d.dims()[2];
-	T a[w_slice_size];
-	T b[c_slice_size];
-        memory::Copy(cplace, a, gplace, weight_3d_slice.data<T>(), sizeof(T) * w_slice_size, dev_ctx.stream());
-        //std::cout << "====weight_3d_slice===" << std::endl;
-        for (int i = 0; i < w_slice_size; i++) {
-        //  std::cout << i << ": " <<a[i] << "  ";
-        }
-        //std::cout << std::endl;
-        memory::Copy(cplace, b, gplace, col_buffer_3d_slice.data<T>(), sizeof(T) * c_slice_size, dev_ctx.stream());
-        //std::cout << "====col_buffer_3d_slice===" << std::endl;
-        for (int i = 0; i < c_slice_size; i++) {
-        //  std::cout << i << ": " <<b[i] << "  ";
-        }
-        //std::cout << std::endl;
-        // gemm
         blas.MatMul(weight_3d_slice, false, col_buffer_3d_slice, false, T(1.0),
                     &output_3d_slice, T(0.0));
 
-	int o_slice_size = M * N;
-	T o[o_slice_size];
-        memory::Copy(cplace, o, gplace, output_3d_slice.data<T>(), sizeof(T) * o_slice_size, dev_ctx.stream());
-        //std::cout << "====output_3d_slice===" << std::endl;
-        for (int i = 0; i < o_slice_size; i++) {
-        //  std::cout << i << ": " <<o[i] << "  ";
-        }
-        //std::cout << std::endl;
       }
     }
     Tensor trans_output_4d;
@@ -678,26 +562,9 @@ class ModulatedDeformableConvCUDAKernel : public framework::OpKernel<T> {
     framework::DDim origin_output_4d_shape = {
         batch_size / im2col_step, im2col_step, filter_shape_vec[0],
         output_shape_vec[2] * output_shape_vec[3]};
-    // swap axis
     origin_output_4d = trans_output_4d.Resize(origin_output_4d_shape);
     output->ShareDataWith(origin_output_4d.Resize(framework::make_ddim(output_shape_vec)));
 
-    int out_size = origin_output_4d.numel();
-    T ou[out_size];
-    memory::Copy(cplace, ou, gplace, origin_output_4d.data<T>(), sizeof(T) * out_size, dev_ctx.stream());
-    //std::cout << "====origin_output_4d===" << std::endl;
-    for (int i = 0; i < out_size; i++) {
-    //  std::cout << i << ": " <<ou[i] << "  ";
-    }
-    //std::cout << std::endl;
-
-    T oo[out_size];
-    memory::Copy(cplace, oo, gplace, output->data<T>(), sizeof(T) * out_size, dev_ctx.stream());
-    //std::cout << "====output===" << std::endl;
-    for (int i = 0; i < out_size; i++) {
-    //  std::cout << i << ": " <<oo[i] << "  ";
-    }
-    //std::cout << std::endl;
     // TODO(yifan): check bias
   }
 };
@@ -715,14 +582,12 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     Tensor* offset_grad = ctx.Output<Tensor>(framework::GradVarName("Offset"));
     Tensor* mask_grad = ctx.Output<Tensor>(framework::GradVarName("Mask"));
     
-
     const Tensor* input = ctx.Input<Tensor>("Input");
     Tensor offset = *ctx.Input<Tensor>("Offset");
     Tensor mask = *ctx.Input<Tensor>("Mask");
     Tensor filter = *ctx.Input<Tensor>("Filter");
 
     if (!input_grad && !filter_grad && !offset_grad && !mask_grad) return;
-    
 
     int groups = ctx.Attr<int>("groups");
     int deformable_groups = ctx.Attr<int>("deformable_groups");
@@ -737,16 +602,11 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     framework::DDim input_shape =
         framework::slice_ddim(input->dims(), 1, input->dims().size());
     std::vector<int64_t> input_shape_vec = framework::vectorize(input_shape);
-
-    // filter_shape_vec: {c_o, c_i, k_h, k_w}
     std::vector<int64_t> filter_shape_vec(framework::vectorize(filter.dims()));
-    // output_shape_vec: {n, o_c, o_h, o_w}
     std::vector<int64_t> output_shape_vec(
         framework::vectorize(output_grad->dims()));
 
-    // get col_shape in the im2col calculation
     size_t data_dim = filter_shape_vec.size() - 2;
-    // col_buffer_shape_vec {c_i * k_h * k_w, im2col_step, o_h, o_w}
     std::vector<int64_t> col_buffer_shape_vec(data_dim + 2);
     col_buffer_shape_vec[0] =
         input->dims()[1] * filter.dims()[2] * filter.dims()[3];
@@ -764,15 +624,6 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     col_buffer = ctx.AllocateTmpTensor<T, DeviceContext>(col_shape, dev_ctx);
     output_buffer =
         ctx.AllocateTmpTensor<T, DeviceContext>(output_shape, dev_ctx);
-    /* 
-    int og_size = output_grad->numel();
-    T og[og_size];
-    memory::Copy(cplace, og, gplace, output_grad->data<T>(), sizeof(T) * og_size, dev_ctx.stream());
-    std::cout << "====output_grad===" << std::endl;
-    for (int i = 0; i < og_size; i++) {
-      std::cout << i << ": " <<og[i] << "  ";
-    }
-    std::cout << std::endl;*/
 
     Tensor trans_output_4d;
     framework::DDim trans_output_4d_shape = {
@@ -787,15 +638,8 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
         output_shape_vec[2] * output_shape_vec[3]};
     origin_output_4d.ShareDataWith(*output_grad);
     trans_output_4d = origin_output_4d.Resize(trans_output_4d_shape);
+
     output_buffer.ShareDataWith(trans_output_4d);
-    int ob_size = output_buffer.numel();
-    T ob[ob_size];
-    memory::Copy(cplace, ob, gplace, output_buffer.data<T>(), sizeof(T) * ob_size, dev_ctx.stream());
-    std::cout << "====output_buffer===" << std::endl;
-    for (int i = 0; i < ob_size; i++) {
-      std::cout << i << ": " <<ob[i] << "  ";
-    }
-    std::cout << std::endl;
 
     int64_t M = input_shape_vec[0] / groups * filter_shape_vec[2] * filter_shape_vec[3];
     int64_t N = im2col_step * output_shape_vec[2] * output_shape_vec[3];
@@ -805,71 +649,53 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
     framework::DDim out_grad_4d_shape = {batch_size / im2col_step, groups, K,
                                          N};
     framework::DDim col_buffer_3d_shape = {groups, M, N};
-    framework::DDim dweight_3d_shape = {groups, K, M};
+    framework::DDim filter_grad_shape = {groups, K, M};
     framework::DDim data_grad_shape = {input_grad->numel()};
     
+    input_grad->mutable_data<T>(ctx.GetPlace());
+    filter_grad->mutable_data<T>(ctx.GetPlace());
+    std::cout << "filter_grad_shape: " << filter_grad->dims().size() << std::endl;
+    std::cout << filter_grad->dims()[0]<<" " << filter_grad->dims()[1] <<" "<< filter_grad->dims()[2]<<" "<<filter_grad->dims()[3]<<" " << std::endl;
+    offset_grad->mutable_data<T>(ctx.GetPlace());
+    mask_grad->mutable_data<T>(ctx.GetPlace());
 
     Tensor weight_3d;
     weight_3d.ShareDataWith(filter);
     weight_3d.Resize(weight_3d_shape);
-    std::cout << "====weight_3d done====" << std::endl;
     Tensor out_grad_4d;
     out_grad_4d.ShareDataWith(output_buffer);
-    out_grad_4d.Resize(out_grad_4d_shape);
-    
-    std::cout << "====out_grad_4d done====" << std::endl;
+    out_grad_4d.Resize(out_grad_4d_shape); 
     Tensor col_buffer_3d;
-    col_buffer_3d.ShareDataWith(col_buffer);
-    col_buffer_3d.Resize(col_buffer_3d_shape);
     col_buffer_3d.mutable_data<T>(ctx.GetPlace());
-    std::cout << "====col_buffer_3d done====" << std::endl;
-    
-    input_grad->mutable_data<T>(ctx.GetPlace());
-    filter_grad->mutable_data<T>(ctx.GetPlace());
-    
-    Tensor dweight_3d;
-    dweight_3d.ShareDataWith(*filter_grad);
-    dweight_3d.Resize(dweight_3d_shape);
-    std::cout << "====dweight done====" << std::endl;
+    col_buffer_3d.ShareDataWith(col_buffer);
+    col_buffer_3d.Resize(col_buffer_3d_shape);     
+    // Tensor dweight_3d;
+    // dweight_3d.ShareDataWith(*filter_grad);
+    // dweight_3d.Resize(dweight_3d_shape);
+    filter_grad->Resize(filter_grad_shape);
     Tensor data_grad;
     data_grad.ShareDataWith(*input_grad);
     data_grad.Resize(data_grad_shape);
-    std::cout << "====tensor spec done====" << std::endl;
 
     math::SetConstant<DeviceContext, T> set_zero;
     auto blas = math::GetBlas<DeviceContext, T>(dev_ctx);
-    
-
-    std::cout << "====before set zero====" << std::endl;
     set_zero(dev_ctx, &data_grad, static_cast<T>(0));
     input_grad->ShareDataWith(data_grad);
-    std::cout << "====set zero done====" << std::endl;
 
     col_buffer.mutable_data<T>(ctx.GetPlace());
-    dweight_3d.mutable_data<T>(ctx.GetPlace());
+    // dweight_3d.mutable_data<T>(ctx.GetPlace());
     
     int input_dim = input->numel() / input->dims()[0];
     int input_offset_dim = offset.numel() / offset.dims()[0];
     int input_mask_dim = mask.numel() / mask.dims()[0];
     
-    offset_grad->mutable_data<T>(ctx.GetPlace());
-    mask_grad->mutable_data<T>(ctx.GetPlace());
-
-    const T* input_ptr = input->data<T>();
-    const T* offset_ptr = offset.data<T>();
-    const T* mask_ptr = mask.data<T>();
-    T* col_buffer_ptr = col_buffer.data<T>();
-    T* offset_grad_ptr = offset_grad->data<T>(); 
-    T* mask_grad_ptr = mask_grad->data<T>();
-    T* input_grad_ptr = input_grad->data<T>();
-    
     out_grad_4d.mutable_data<T>(ctx.GetPlace());
 
-    for (int i = 0; i < batch_size / im2col_step; i++) {
+    for (int i = 0; i < batch_size / im2col_step; ++i) {
       Tensor out_grad_3d =
           out_grad_4d.Slice(i, i + 1).Resize(framework::slice_ddim(
               out_grad_4d.dims(), 1, out_grad_4d.dims().size()));
-      for (int g = 0; g < groups; g++) {
+      for (int g = 0; g < groups; ++g) {
         Tensor weight_3d_slice =
             weight_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
                 weight_3d.dims(), 1, weight_3d.dims().size()));
@@ -880,37 +706,18 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
             col_buffer_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
                 col_buffer_3d.dims(), 1, col_buffer_3d.dims().size()));
       
-      int w3s_size = weight_3d_slice.numel();
-      T w3s[w3s_size];
-      memory::Copy(cplace, w3s, gplace, weight_3d_slice.data<T>(), sizeof(T) * w3s_size, dev_ctx.stream());
-      std::cout << "====weight_3d_slice===" << std::endl;
-      for (int i = 0; i < w3s_size; i++) {
-        std::cout << i << ": " <<w3s[i] << "  ";
-      }
-      std::cout << std::endl;
-
-
-      int og3s_size = out_grad_3d_slice.numel();
-      T og3s[og3s_size];
-      memory::Copy(cplace, og3s, gplace, out_grad_3d_slice.data<T>(), sizeof(T) * og3s_size, dev_ctx.stream());
-      std::cout << "====out_grad_3d_slice===" << std::endl;
-      for (int i = 0; i < og3s_size; i++) {
-        std::cout << i << ": " <<og3s[i] << "  ";
-      }
-      std::cout << std::endl;
-
         blas.MatMul(weight_3d_slice, true, out_grad_3d_slice, false, T(1.0),
                     &col_buffer_3d_slice, T(0.0));
       }
-      std::cout << "====after 1 matmul====" << std::endl; 
-      int cb_size = col_buffer_3d.numel();
-      T cb[cb_size];
-      memory::Copy(cplace, cb, gplace, col_buffer_3d.data<T>(), sizeof(T) * cb_size, dev_ctx.stream());
-      std::cout << "====col_buffer_3d===" << std::endl;
-      for (int i = 0; i < cb_size; i++) {
-        std::cout << i << ": " <<cb[i] << "  ";
-      }
-      std::cout << std::endl;
+      col_buffer.ShareDataWith(col_buffer_3d);
+      col_buffer.Resize(col_shape);
+
+      T* col_buffer_ptr = col_buffer.data<T>();
+      const T* input_ptr = input->data<T>();
+      const T* offset_ptr = offset.data<T>();
+      const T* mask_ptr = mask.data<T>();
+      T* offset_grad_ptr = offset_grad->data<T>(); 
+      T* mask_grad_ptr = mask_grad->data<T>();
 
       modulated_deformable_col2im_coord(
           ctx.device_context(), col_buffer_ptr,
@@ -919,27 +726,16 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           mask_ptr + i * im2col_step * input_mask_dim, input_shape_vec,
           col_buffer_shape_vec, filter_shape_vec, paddings, strides, dilations,
           deformable_groups, offset_grad_ptr + i * im2col_step * input_offset_dim,
-          mask_grad_ptr +
-              i * im2col_step * input_mask_dim);
-      std::cout << "====after col2im coord====" << std::endl; 
+          mask_grad_ptr + i * im2col_step * input_mask_dim);
 
+      T* input_grad_ptr = input_grad->data<T>();
       modulated_deformable_col2im(
           ctx.device_context(), col_buffer_ptr,
           offset_ptr + i * im2col_step * input_offset_dim,
           mask_ptr + i * im2col_step * input_mask_dim, input_shape_vec,
           col_buffer_shape_vec, filter_shape_vec, paddings, strides, dilations,
           deformable_groups, input_grad_ptr + i * im2col_step * input_dim);
-
-      input_grad->Resize(input->dims());
-      std::cout << "====after col2im====" << std::endl; 
-      int ig_size = input_grad->numel();
-      T ig[ig_size];
-      memory::Copy(cplace, ig, gplace, input_grad->data<T>(), sizeof(T) * ig_size, dev_ctx.stream());
-      std::cout << "====input_grad_3d===" << std::endl;
-      for (int i = 0; i < ig_size; i++) {
-        std::cout << i << ": " <<ig[i] << "  ";
-      }
-      std::cout << std::endl;
+      input_grad->Resize(input->dims()); 
 
       modulated_deformable_im2col(
           ctx.device_context(), input_ptr + i * im2col_step * input_dim,
@@ -947,17 +743,14 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
           mask_ptr + i * im2col_step * input_mask_dim, input_shape_vec,
           col_buffer_shape_vec, filter_shape_vec, paddings, strides, dilations,
           deformable_groups, col_buffer_ptr);
-      std::cout << "====after im2col====" << std::endl; 
-      int cb2_size = col_buffer.numel();
-      T cb2[cb2_size];
-      memory::Copy(cplace, cb2, gplace, col_buffer.data<T>(), sizeof(T) * cb2_size, dev_ctx.stream());
-      std::cout << "====col_buffer_im2col===" << std::endl;
-      for (int i = 0; i < cb2_size; i++) {
-        std::cout << i << ": " <<cb2[i] << "  ";
-      }
-      std::cout << std::endl;
+      
+      col_buffer_3d.ShareDataWith(col_buffer);
+      col_buffer_3d.Resize(col_buffer_3d_shape);
 
-      for (int g = 0; g < groups; g++) {
+      Tensor dweight_3d;
+      dweight_3d = ctx.AllocateTmpTensor<T, DeviceContext>(filter_grad_shape, dev_ctx);
+
+      for (int g = 0; g < groups; ++g) {
         Tensor out_grad_3d_slice =
             out_grad_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
                 out_grad_3d.dims(), 1, out_grad_3d.dims().size()));
@@ -967,18 +760,13 @@ class ModulatedDeformableConvGradCUDAKernel : public framework::OpKernel<T> {
         Tensor dweight_3d_slice =
             dweight_3d.Slice(g, g + 1).Resize(framework::slice_ddim(
                 dweight_3d.dims(), 1, dweight_3d.dims().size()));
+
         blas.MatMul(out_grad_3d_slice, false, col_buffer_3d_slice, true, T(1.0),
                     &dweight_3d_slice, T(0.0));
       }
-      int dw_size = dweight_3d.numel();
-      T dw[dw_size];
-      memory::Copy(cplace, dw, gplace, dweight_3d.data<T>(), sizeof(T) * dw_size, dev_ctx.stream());
-      std::cout << "====dweight_3d===" << std::endl;
-      for (int i = 0; i < dw_size; i++) {
-        std::cout << i << ": " <<dw[i] << "  ";
-      }
-      std::cout << std::endl;
+      filter_grad_addup_gpu_kernel<T><<<NumBlocks(dweight_3d.numel()), kNumCUDAThreads, 0, ctx.cuda_device_context().stream()>>>(dweight_3d.numel(), groups, K, M, dweight_3d.data<T>(), filter_grad->data<T>());
     }
+    filter_grad->Resize(filter.dims());
     // bias
   }
 };
