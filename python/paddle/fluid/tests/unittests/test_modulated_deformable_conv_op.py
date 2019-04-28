@@ -153,34 +153,26 @@ class TestModulatedDeformableConvOp(OpTest):
         self.check_grad_with_place(
             place, ['Input', 'Offset', 'Mask'],
             'Output',
-            max_relative_error=0.02,
+            max_relative_error=0.05,
             no_grad_set=set(['Filter']))
     
-    '''
+
     def test_check_grad_no_input(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
             place, ['Filter', 'Offset', 'Mask'],
             'Output',
-            max_relative_error=0.02,
+            max_relative_error=0.1,
             no_grad_set=set(['Input']))
 
-    def test_check_grad_no_offset(self):
+    def test_check_grad_no_offset_no_mask(self):
         place = core.CUDAPlace(0)
         self.check_grad_with_place(
-            place, ['Input', 'Filter', 'Mask'],
+            place, ['Input', 'Filter'],
             'Output',
-            max_relative_error=0.02,
-            no_grad_set=set(['Offset']))
+            max_relative_error=0.05,
+            no_grad_set=set(['Offset', 'Mask']))
 
-    def test_check_grad_no_mask(self):
-        place = core.CUDAPlace(0)
-        self.check_grad_with_place(
-            place, ['Input', 'Offset', 'Filter'],
-            'Output',
-            max_relative_error=0.02,
-            no_grad_set=set(['Mask']))
-    '''
     def init_test_case(self):
         self.pad = [1, 1]
         self.stride = [1, 1]
@@ -199,77 +191,6 @@ class TestModulatedDeformableConvOp(OpTest):
 
     def init_group(self):
         self.groups = 1
-
-#class TestWithPad(TestConv2dOp):
-#    def init_test_case(self):
-#        self.pad = [1, 1]
-#        self.stride = [1, 1]
-#        self.input_size = [2, 3, 5, 5]  # NCHW
-#        assert np.mod(self.input_size[1], self.groups) == 0
-#        f_c = self.input_size[1] // self.groups
-#        self.filter_size = [6, f_c, 3, 3]
-#        self.offset_size = [2, 18, 5, 5]
-#        self.mask_size = [2, 9, 5, 5]
-#        self.deformable_groups = 1
-#        self.im2col_step = 1
-#
-#
-#class TestWithStride(TestConv2dOp):
-#    def init_test_case(self):
-#        self.pad = [1, 1]
-#        self.stride = [1, 1]
-#        self.input_size = [2, 3, 6, 6]  # NCHW
-#        assert np.mod(self.input_size[1], self.groups) == 0
-#        f_c = self.input_size[1] // self.groups
-#        self.filter_size = [6, f_c, 3, 3]
-#        self.offset_size = [2, 18, 6, 6]
-#        self.mask_size = [2, 9, 6, 6]
-#        self.deformable_groups = 1
-#        self.im2col_step = 1
-
-
-# class TestWithGroup(TestConv2dOp):
-#     def init_group(self):
-#         self.groups = 1
-
-# class TestWith1x1(TestConv2dOp):
-#     def init_test_case(self):
-#         self.pad = [1, 1]
-#         self.stride = [1, 1]
-#         self.input_size = [2, 3, 5, 5]  # NCHW
-#         assert np.mod(self.input_size[1], self.groups) == 0
-#         f_c = self.input_size[1] // self.groups
-#         self.filter_size = [6, f_c, 1, 1]
-
-#     def init_group(self):
-#         self.groups = 3
-
-# class TestWithDilation(TestConv2dOp):
-#     def init_test_case(self):
-#         self.pad = [0, 0]
-#         self.stride = [1, 1]
-#         self.input_size = [2, 3, 10, 10]  # NCHW
-#         assert np.mod(self.input_size[1], self.groups) == 0
-#         f_c = self.input_size[1] // self.groups
-#         self.filter_size = [6, f_c, 3, 3]
-
-#     def init_dilation(self):
-#         self.dilations = [2, 2]
-
-#     def init_group(self):
-#         self.groups = 3
-
-# class TestWithInput1x1Filter1x1(TestConv2dOp):
-#     def init_test_case(self):
-#         self.pad = [0, 0]
-#         self.stride = [1, 1]
-#         self.input_size = [2, 3, 1, 1]  # NCHW
-#         assert np.mod(self.input_size[1], self.groups) == 0
-#         f_c = self.input_size[1] // self.groups
-#         self.filter_size = [6, f_c, 1, 1]
-
-#     def init_group(self):
-#         self.groups = 3
 
 if __name__ == '__main__':
     unittest.main()
