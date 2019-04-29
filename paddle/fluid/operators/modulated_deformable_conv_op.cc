@@ -141,9 +141,6 @@ class ModulatedDeformableConvOp : public framework::OperatorWithKernel {
     for (size_t i = 0; i < strides.size(); ++i) {
       PADDLE_ENFORCE_GT(strides[i], 0U, "incorrect stride size");
     }
-    for (size_t i = 0; i < paddings.size(); ++i) {
-      PADDLE_ENFORCE_GT(paddings[i], 0U, "incorrect padding size");
-    }
     for (size_t i = 0; i < dilations.size(); ++i) {
       PADDLE_ENFORCE_GT(dilations[i], 0U, "incorrect dilation size");
     }

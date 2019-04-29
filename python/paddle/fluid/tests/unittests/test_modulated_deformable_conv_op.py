@@ -51,28 +51,27 @@ def dmc_bilinear(data_im, height, width, h, w):
     return val
 
 
-def dconv_im2col_gemm(input, offset, mask, filter, conv2d_param):
+def dconv_im2col_gemm(input, offset, mask, filter, group, conv_param):
     in_n, in_c, in_h, in_w = input.shape
     out_c, f_c, f_h, f_w = filter.shape
 
     assert offset.shape == (in_n, 2 * f_h * f_w, in_h, in_w)
     assert mask.shape == (in_n, f_h * f_w, in_h, in_w)
-    assert f_c == in_c
+    assert f_c * group == in_c
+    assert np.mod(out_c, group) == 0
 
-    out_h = in_h
-    out_w = in_w
-    out = np.zeros((in_n, out_c, out_h * out_w))
-    input_pad = np.pad(input, ((0, ), (0, ), ((f_h - 1) // 2, ), (
-        (f_w - 1) // 2, )),
-                       mode='constant',
-                       constant_values=0)
+    stride, pad, dilation = conv_param['stride'], conv_param['pad'],\
+        conv_param['dilation']
+    out_h = 1 + (in_h + 2 * pad[0] - (dilation[0] * (f_h - 1) + 1)) // stride[0]
+    out_w = 1 + (in_w + 2 * pad[1] - (dilation[1] * (f_w - 1) + 1)) // stride[1]
+    assert out_h == in_h
+    assert out_w == in_w
+
     col_buffer = np.zeros((in_n, in_c * f_h * f_w, in_h * in_w))
-    in_n, in_c, in_pad_h, in_pad_w = input_pad.shape
-
     for n in range(in_n):
         for c in range(in_c):
-            for h in range(in_h):
-                for w in range(in_w):
+            for h in range(out_h):
+                for w in range(out_w):
                     for kh in range(f_h):
                         for kw in range(f_w):
                             offset_h_table = \
@@ -84,8 +83,10 @@ def dconv_im2col_gemm(input, offset, mask, filter, conv2d_param):
                             offset_h = offset_h_table[kh, kw]
                             offset_w = offset_w_table[kh, kw]
                             val = 0
-                            im_h = h + kh + offset_h - (f_h - 1) // 2
-                            im_w = w + kw + offset_w - (f_w - 1) // 2
+                            im_h = h * stride[0] + kh * dilation[0] \
+                                + offset_h - pad[0]
+                            im_w = w * stride[0] + kw * dilation[0] \
+                                + offset_w - pad[1]
                             if im_h > -1 and im_w > -1 and \
                                 im_h < in_h and im_w < in_h:
                                 val = dmc_bilinear(input[n, c], in_h, in_w,
@@ -93,9 +94,13 @@ def dconv_im2col_gemm(input, offset, mask, filter, conv2d_param):
                             val_out = val * mask_table[kh, kw]
                             col_buffer[n, c * f_h * f_w + kh * f_w + kw, h *
                                        in_w + w] = val_out
-    weight = filter.reshape(out_c, f_c * f_h * f_w)
+
+    out = np.zeros((in_n, group, out_c / group, out_h * out_w))
+    weight = filter.reshape(group, out_c / group,  f_c * f_h * f_w)
+    col_buffer = col_buffer.reshape((in_n, group, in_c / group * f_h * f_w, in_h * in_w))
     for n in range(in_n):
-        out[n] = np.matmul(weight, col_buffer[n])
+        for g in range(group):
+            out[n, g] = np.matmul(weight[g], col_buffer[n, g]) 
     out = out.reshape(in_n, out_c, out_h, out_w)
     return out
 
@@ -108,7 +113,7 @@ class TestModulatedDeformableConvOp(OpTest):
         self.init_dilation()
         self.init_test_case()
 
-        conv2d_param = {
+        conv_param = {
             'stride': self.stride,
             'pad': self.pad,
             'dilation': self.dilations
@@ -119,7 +124,7 @@ class TestModulatedDeformableConvOp(OpTest):
         mask = 10 * np.random.random(self.mask_size).astype(self.dtype)
         filter = np.random.random(self.filter_size).astype(self.dtype)
 
-        output = dconv_im2col_gemm(input, offset, mask, filter, conv2d_param)
+        output = dconv_im2col_gemm(input, offset, mask, filter, self.groups, conv_param)
         output = output.astype(self.dtype)
 
         self.inputs = {
@@ -154,7 +159,7 @@ class TestModulatedDeformableConvOp(OpTest):
         self.check_grad_with_place(
             place, ['Input', 'Offset', 'Mask'],
             'Output',
-            max_relative_error=0.05,
+            max_relative_error=0.1,
             no_grad_set=set(['Filter']))
 
     def test_check_grad_no_input(self):
@@ -170,21 +175,23 @@ class TestModulatedDeformableConvOp(OpTest):
         self.check_grad_with_place(
             place, ['Input', 'Filter'],
             'Output',
-            max_relative_error=0.05,
+            max_relative_error=0.1,
             no_grad_set=set(['Offset', 'Mask']))
 
     def init_test_case(self):
         self.pad = [1, 1]
         self.stride = [1, 1]
         self.dilations = [1, 1]
-        self.input_size = [2, 3, 5, 5]  # NCHW
+        self.input_size = [2, 4, 4, 4]  # NCHW
         assert np.mod(self.input_size[1], self.groups) == 0
         f_c = self.input_size[1] // self.groups
-        self.filter_size = [6, f_c, 3, 3]
-        self.offset_size = [2, 18, 5, 5]
-        self.mask_size = [2, 9, 5, 5]
+        self.filter_size = [4, f_c, 3, 3]
         self.im2col_step = 1
         self.deformable_groups = 1
+        offset_c = 2 * self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        mask_c = self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        self.offset_size = [self.input_size[0], offset_c, self.input_size[2], self.input_size[3]]
+        self.mask_size = [self.input_size[0], mask_c, self.input_size[2], self.input_size[3]]
 
     def init_dilation(self):
         self.dilations = [1, 1]
@@ -192,6 +199,59 @@ class TestModulatedDeformableConvOp(OpTest):
     def init_group(self):
         self.groups = 1
 
+class TestWithStride(TestModulatedDeformableConvOp):
+    def init_test_case(self):
+        self.pad = [3, 3]
+        self.stride = [2, 2]
+        self.input_size = [2, 3, 5, 5]  # NCHW
+        assert np.mod(self.input_size[1], self.groups) == 0
+        f_c = self.input_size[1] // self.groups
+        self.filter_size = [6, f_c, 3, 3]
+        self.im2col_step = 1
+        self.deformable_groups = 1
+        offset_c = 2 * self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        mask_c = self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        self.offset_size = [self.input_size[0], offset_c, self.input_size[2], self.input_size[3]]
+        self.mask_size = [self.input_size[0], mask_c, self.input_size[2], self.input_size[3]]
+
+
+class TestWithDilation(TestModulatedDeformableConvOp):
+    def init_test_case(self):
+        self.pad = [2, 2]
+        self.stride = [1, 1]
+        self.input_size = [2, 3, 4, 4]  # NCHW
+        assert np.mod(self.input_size[1], self.groups) == 0
+        f_c = self.input_size[1] // self.groups
+        self.filter_size = [6, f_c, 3, 3]
+        self.im2col_step = 1
+        self.deformable_groups = 1
+        offset_c = 2 * self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        mask_c = self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        self.offset_size = [self.input_size[0], offset_c, self.input_size[2], self.input_size[3]]
+        self.mask_size = [self.input_size[0], mask_c, self.input_size[2], self.input_size[3]]
+
+    def init_dilation(self):
+        self.dilations = [2, 2]
+
+
+class TestWith1x1(TestModulatedDeformableConvOp):
+    def init_test_case(self):
+        self.pad = [0, 0]
+        self.stride = [1, 1]
+        self.input_size = [2, 3, 5, 5]  # NCHW
+        assert np.mod(self.input_size[1], self.groups) == 0
+        f_c = self.input_size[1] // self.groups
+        self.filter_size = [6, f_c, 1, 1]
+        self.im2col_step = 1
+        self.deformable_groups = 1
+        offset_c = 2 * self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        mask_c = self.deformable_groups * self.filter_size[2] * self.filter_size[3] 
+        self.offset_size = [self.input_size[0], offset_c, self.input_size[2], self.input_size[3]]
+        self.mask_size = [self.input_size[0], mask_c, self.input_size[2], self.input_size[3]]
+
+class TestWithGroup(TestModulatedDeformableConvOp):
+    def init_group(self):
+        self.groups = 2
 
 if __name__ == '__main__':
     unittest.main()
