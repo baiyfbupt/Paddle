@@ -225,8 +225,12 @@ REGISTER_OPERATOR(addcmul_grad, ops::AddcmulGradOp);
 
 REGISTER_OP_CPU_KERNEL(
     addcmul, ops::AddcmulKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::AddcmulKernel<paddle::platform::CPUDeviceContext, double>);
+    ops::AddcmulKernel<paddle::platform::CPUDeviceContext, double>,
+    ops::AddcmulKernel<paddle::platform::CPUDeviceContext, int>,
+    ops::AddcmulKernel<paddle::platform::CPUDeviceContext, int64_t>);
 REGISTER_OP_CPU_KERNEL(
     addcmul_grad,
     ops::AddcmulGradKernel<paddle::platform::CPUDeviceContext, float>,
-    ops::AddcmulGradKernel<paddle::platform::CPUDeviceContext, double>);
+    ops::AddcmulGradKernel<paddle::platform::CPUDeviceContext, double>,
+    ops::AddcmulGradKernel<paddle::platform::CPUDeviceContext, int>,
+    ops::AddcmulGradKernel<paddle::platform::CPUDeviceContext, int64_t>);

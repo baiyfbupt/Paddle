@@ -119,7 +119,11 @@ elementwise_mul_grad(const framework::ExecutionContext& ctx,
 
 REGISTER_OP_CUDA_KERNEL(addcmul,
                         ops::AddcmulKernel<plat::CUDADeviceContext, float>,
-                        ops::AddcmulKernel<plat::CUDADeviceContext, double>);
+                        ops::AddcmulKernel<plat::CUDADeviceContext, double>,
+                        ops::AddcmulKernel<plat::CUDADeviceContext, int>,
+                        ops::AddcmulKernel<plat::CUDADeviceContext, int64_t>);
 REGISTER_OP_CUDA_KERNEL(
     addcmul_grad, ops::AddcmulGradKernel<plat::CUDADeviceContext, float>,
-    ops::AddcmulGradKernel<plat::CUDADeviceContext, double>);
+    ops::AddcmulGradKernel<plat::CUDADeviceContext, double>,
+    ops::AddcmulGradKernel<plat::CUDADeviceContext, int>,
+    ops::AddcmulGradKernel<plat::CUDADeviceContext, int64_t>);

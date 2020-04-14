@@ -1262,7 +1262,8 @@ def addcmul(input, tensor1, tensor2, value=1.0, out=None, name=None):
     **addcmul**
 
     Calculate the element-wise multiplication of tensor1 and tensor2,
-    then multiply the result by value, and add it to input.
+    then multiply the result by value, and add it to input. The shape of input,
+    tensor1, tensor2 should be broadcastable.
     The equation is:
 
     ..  math::
@@ -1273,6 +1274,12 @@ def addcmul(input, tensor1, tensor2, value=1.0, out=None, name=None):
         tensor1(Variable): The tensor to be multiplied. A Tensor with type float32, float64.
         tensor2(Variable): The tensor to be multiplied. A Tensor with type float32, float64.
         value(float|double): The multiplier for tensor1*tensor2.
+        out(Variable, Optional): The variable that specifies the output of the
+            operator, which can be Variable that has been created in the
+            program. The default value is None, and a new Variable will be
+            created to save the output. Default: None.
+        name(str, Optional): For details, please refer to :ref:`api_guide_Name`.
+                        Generally, no setting is required. Default: None.
 
     Returns:
         out(Variable): The output result. A Tensor with type float32, float64.
